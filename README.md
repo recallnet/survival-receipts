@@ -147,6 +147,19 @@ the same repo and window. AI markers are intentionally narrow:
 - explicit commit-message labels such as `ai-assisted`, `claude-code`,
   `cursor`, `codex`, or `copilot`
 
+The report also splits AI and human survival by added-line size bucket:
+
+```text
+tiny:   1-20 added lines
+small:  21-100 added lines
+medium: 101-500 added lines
+large:  501+ added lines
+```
+
+This keeps large PRs from silently dominating the headline number. The raw
+overall score stays in the report, but the bucket table is the fairer first
+place to compare AI and human changes.
+
 This version skips merge commits because proper support needs branch
 reconstruction. Squash-merged PRs work well because the squash commit is the
 auditable unit. It also skips generated files, lockfiles, build output, vendored

@@ -11,6 +11,33 @@ interface ChangeGroupSummary {
   estimatedCostUsd: number;
 }
 
+interface BucketGroupSummary {
+  changes: number;
+  addedLines: number;
+  survivingLines: number;
+  survivalRatio: number | null;
+}
+
+interface BucketComparison {
+  bucket: SizeBucket;
+  ai: BucketGroupSummary;
+  human: BucketGroupSummary;
+}
+
+interface SizeBucket {
+  id: "tiny" | "small" | "medium" | "large";
+  label: string;
+  min: number;
+  max: number | null;
+}
+
+const sizeBuckets: SizeBucket[] = [
+  { id: "tiny", label: "Tiny, 1-20 lines", min: 1, max: 20 },
+  { id: "small", label: "Small, 21-100 lines", min: 21, max: 100 },
+  { id: "medium", label: "Medium, 101-500 lines", min: 101, max: 500 },
+  { id: "large", label: "Large, 501+ lines", min: 501, max: null }
+];
+
 const round = (value: number, digits = 1) => {
   const scale = 10 ** digits;
   return Math.round(value * scale) / scale;
@@ -21,6 +48,16 @@ const sum = <T>(values: T[], select: (value: T) => number) =>
 
 const pct = (value: number | null) =>
   value === null ? "n/a" : `${round(value * 100, 1)}%`;
+
+const pointDelta = (aiRatio: number | null, humanRatio: number | null) => {
+  if (aiRatio === null || humanRatio === null) {
+    return "n/a";
+  }
+
+  const delta = round((aiRatio - humanRatio) * 100, 1);
+
+  return `${delta >= 0 ? "+" : ""}${delta} pts`;
+};
 
 const money = (value: number) => `$${round(value, 2).toFixed(2)}`;
 
@@ -52,6 +89,66 @@ const summarize = (
     survivalRatio: addedLines > 0 ? survivingLines / addedLines : null,
     estimatedCostUsd: sum(scored, (change) => change.estimatedAiCostUsd)
   };
+};
+
+const bucketFor = (change: ScannedChange) =>
+  sizeBuckets.find(
+    (bucket) =>
+      change.addedLines >= bucket.min &&
+      (bucket.max === null || change.addedLines <= bucket.max)
+  );
+
+const summarizeBucket = (
+  changes: ScannedChange[],
+  kind: "ai" | "human",
+  bucket: SizeBucket
+): BucketGroupSummary => {
+  const bucketChanges = changes.filter(
+    (change) => change.kind === kind && bucketFor(change)?.id === bucket.id
+  );
+  const addedLines = sum(bucketChanges, (change) => change.addedLines);
+  const survivingLines = sum(bucketChanges, (change) => change.survivingLines);
+
+  return {
+    changes: bucketChanges.length,
+    addedLines,
+    survivingLines,
+    survivalRatio: addedLines > 0 ? survivingLines / addedLines : null
+  };
+};
+
+const compareSizeBuckets = (result: ScanResult): BucketComparison[] => {
+  const scored = result.changes.filter((change) => change.status === "scored");
+
+  return sizeBuckets.map((bucket) => ({
+    bucket,
+    ai: summarizeBucket(scored, "ai", bucket),
+    human: summarizeBucket(scored, "human", bucket)
+  }));
+};
+
+const renderSizeBucketTable = (comparisons: BucketComparison[]) => {
+  const rows = comparisons.map(({ bucket, ai, human }) => {
+    return [
+      bucket.label,
+      String(ai.changes),
+      String(ai.addedLines),
+      String(ai.survivingLines),
+      pct(ai.survivalRatio),
+      String(human.changes),
+      String(human.addedLines),
+      String(human.survivingLines),
+      pct(human.survivalRatio),
+      pointDelta(ai.survivalRatio, human.survivalRatio)
+    ];
+  });
+
+  return [
+    "| Bucket | AI changes | AI added | AI survived | AI survival | Human changes | Human added | Human survived | Human survival | AI minus human |",
+    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ...rows.map((row) => `| ${row.join(" | ")} |`),
+    ""
+  ].join("\n");
 };
 
 const renderChangeTable = (changes: ScannedChange[]) => {
@@ -97,7 +194,42 @@ const renderSkipped = (result: ScanResult) => {
     .join("\n");
 };
 
-const renderVerdict = (ai: ChangeGroupSummary, human: ChangeGroupSummary) => {
+const bucketLeaderSummary = (comparisons: BucketComparison[]) => {
+  const comparable = comparisons.filter(
+    (comparison) =>
+      comparison.ai.survivalRatio !== null &&
+      comparison.human.survivalRatio !== null
+  );
+
+  if (comparable.length === 0) {
+    return "No size bucket had both AI and human scored changes.";
+  }
+
+  const aiWins = comparable.filter(
+    (comparison) => comparison.ai.survivalRatio! > comparison.human.survivalRatio!
+  ).length;
+  const humanWins = comparable.filter(
+    (comparison) => comparison.human.survivalRatio! > comparison.ai.survivalRatio!
+  ).length;
+  const ties = comparable.length - aiWins - humanWins;
+  const tieText = ties > 0 ? `, with ${ties} tied` : "";
+
+  if (aiWins > humanWins) {
+    return `AI led in ${aiWins} of ${comparable.length} comparable size buckets${tieText}.`;
+  }
+
+  if (humanWins > aiWins) {
+    return `Humans led in ${humanWins} of ${comparable.length} comparable size buckets${tieText}.`;
+  }
+
+  return `AI and humans split the ${comparable.length} comparable size buckets${tieText}.`;
+};
+
+const renderVerdict = (
+  ai: ChangeGroupSummary,
+  human: ChangeGroupSummary,
+  bucketComparisons: BucketComparison[]
+) => {
   if (ai.survivalRatio === null) {
     return "No deterministic AI-authored changes were scored in this scan.";
   }
@@ -111,20 +243,22 @@ const renderVerdict = (ai: ChangeGroupSummary, human: ChangeGroupSummary) => {
   }
 
   const ratio = ai.survivalRatio / human.survivalRatio;
+  const lineWeighted =
+    ratio >= 1
+      ? `Overall line-weighted survival: AI was ${round(ratio, 2)}x the human baseline.`
+      : `Overall line-weighted survival: AI added lines died ${round(
+          (1 - ai.survivalRatio) / Math.max(1 - human.survivalRatio, 0.0001),
+          2
+        )}x as often as human added lines.`;
+  const bucketSummary = bucketLeaderSummary(bucketComparisons);
 
-  if (ratio >= 1) {
-    return `AI added-line survival is ${round(ratio, 2)}x the human baseline in this repo window.`;
-  }
-
-  const deathRatio =
-    (1 - ai.survivalRatio) / Math.max(1 - human.survivalRatio, 0.0001);
-
-  return `AI added lines died ${round(deathRatio, 2)}x as often as human added lines in this repo window.`;
+  return `${lineWeighted} ${bucketSummary}`;
 };
 
 export const renderMarkdownReport = (result: ScanResult) => {
   const ai = summarize(result, "ai");
   const human = summarize(result, "human");
+  const bucketComparisons = compareSizeBuckets(result);
   const scored = result.changes.filter((change) => change.status === "scored");
   const scoredAi = ai.scored;
   const durableAi = [...scoredAi]
@@ -143,7 +277,7 @@ export const renderMarkdownReport = (result: ScanResult) => {
     "",
     "## Verdict",
     "",
-    renderVerdict(ai, human),
+    renderVerdict(ai, human, bucketComparisons),
     "",
     "## Scan settings",
     "",
@@ -173,6 +307,9 @@ export const renderMarkdownReport = (result: ScanResult) => {
     } |`,
     `| Human | ${human.changes.length} | ${human.scored.length} | ${human.addedLines} | ${human.survivingLines} | ${pct(human.survivalRatio)} |  |  |`,
     "",
+    "## Survival by change size",
+    "",
+    renderSizeBucketTable(bucketComparisons),
     "## Most durable AI changes",
     "",
     renderChangeTable(durableAi),
@@ -209,6 +346,7 @@ export const renderMarkdownReport = (result: ScanResult) => {
         result.copyDetection ? " and copy detection" : ""
       }.`,
       "A line survives when the horizon blame still attributes it to the source commit.",
+      "Size buckets compare AI and human changes with similar added-line counts: tiny is 1-20 lines, small is 21-100, medium is 101-500, and large is 501 or more.",
       "Generated files, lockfiles, build output, vendored code, sourcemaps, snapshots, binary assets, and media files are excluded.",
       "Merge commits are skipped for now because proper support needs branch reconstruction.",
       "Renamed files may be undercounted in this first scanner because the blame check uses the original path.",
