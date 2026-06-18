@@ -51,6 +51,134 @@ The receipts can become PR comments, Slack digests, team scorecards, or an
 executive rollup later. The important object is the receipt. It makes the score
 auditable instead of turning it into a magic number.
 
+## Local CLI backtest
+
+The first week-one build target is a local CLI that produces a static Markdown
+report from git history:
+
+```bash
+pnpm survival scan --repo /path/to/repo --since 2025-12-01 --horizon 30 --out reports/my-repo
+```
+
+For a first pass on a larger repo, start smaller:
+
+```bash
+pnpm survival scan --repo /path/to/repo --since 2025-12-01 --horizon 30 --limit 50 --out reports/my-repo
+```
+
+Use `inspect` when you want to build an attribution config or audit what the
+CLI can see before running a survival scan:
+
+```bash
+pnpm survival inspect \
+  --repo /path/to/repo \
+  --since 2026-01-01 \
+  --until 2026-03-31
+```
+
+It prints a Markdown inventory of unique commit authors, detected GitHub
+usernames from noreply emails, and PR numbers with inferred titles. It does not
+run blame or score survival.
+
+Use `--until` when you want a bounded source-change window:
+
+```bash
+pnpm survival scan \
+  --repo /path/to/repo \
+  --since 2026-01-01 \
+  --until 2026-03-31 \
+  --horizon 30 \
+  --out reports/q1
+```
+
+`--since` and `--until` choose which commits enter the report. The scanner still
+looks forward by `--horizon` from each selected commit to measure survival.
+
+Use `survival.config.json` in the scanned repo when deterministic markers miss
+AI-authored work you already know about:
+
+```json
+{
+  "ai": {
+    "githubUsernames": ["cto-new[bot]", "claude"],
+    "prNumbers": [1595, 1720]
+  }
+}
+```
+
+Configured PR numbers and GitHub usernames count as AI with 100% attribution
+confidence. The default config path is `survival.config.json` in the scanned
+repo root. You can also pass a file explicitly:
+
+```bash
+pnpm survival scan \
+  --repo /path/to/repo \
+  --config /path/to/survival.config.json \
+  --since 2026-01-01 \
+  --horizon 30 \
+  --out reports/configured
+```
+
+PR-number overrides require a commit subject with a PR number, such as squash
+commits ending in `(#123)` or merge commits containing `Merge pull request
+#123`. GitHub username overrides match exact author or committer names, plus
+GitHub noreply emails such as `12345+cto-new[bot]@users.noreply.github.com`.
+
+The CLI runs entirely on the machine that already has repo access. It does not
+call GitHub, model providers, or a hosted backend. That is the point of this
+slice: produce a receipt a skeptical engineer can audit from local git facts.
+
+The first scanner uses added-line survival:
+
+```text
+surviving added lines / added lines
+```
+
+For each single-parent commit, it finds the commit at the survival horizon and
+runs `git blame -M`. A line survives when the horizon blame still
+attributes it to the source commit.
+
+The report compares deterministic AI-marked changes against human changes in
+the same repo and window. AI markers are intentionally narrow:
+
+- `Co-authored-by` trailers naming Claude, Anthropic, OpenAI, Codex, Copilot,
+  Cursor, Devin, or an agent
+- commit author or committer identities that look like AI agents or bots
+- explicit commit-message labels such as `ai-assisted`, `claude-code`,
+  `cursor`, `codex`, or `copilot`
+
+This version skips merge commits because proper support needs branch
+reconstruction. Squash-merged PRs work well because the squash commit is the
+auditable unit. It also skips generated files, lockfiles, build output, vendored
+code, sourcemaps, snapshots, binary assets, and media files.
+
+It also has runtime guardrails. By default it skips a change when it touches
+more than 25 included files, adds more than 1500 included lines, or has one file
+with more than 300 added lines. Each `git blame` call has a 15 second timeout.
+The report lists skipped changes and the reason. Use these flags when a repo
+needs different limits:
+
+```bash
+pnpm survival scan \
+  --repo /path/to/repo \
+  --since 2025-12-01 \
+  --horizon 30 \
+  --max-files 60 \
+  --max-added-lines 5000 \
+  --max-file-added-lines 1200 \
+  --blame-timeout-ms 60000 \
+  --out reports/my-repo
+```
+
+The default blame mode uses move detection only because copy detection can be
+much slower on real repos. Use `--copy-detection` for a deeper scan when runtime
+matters less than catching copied lines.
+
+Estimated AI cost is a placeholder based on changed lines and file count. It is
+there so the report has the shape of a receipt, not because the scanner knows
+real provider spend yet. Replace it with Claude Code logs, gateway traces, or
+provider exports when those are available.
+
 ## Important concepts
 
 **AI change survival.** The share of AI-assisted change that remains useful
