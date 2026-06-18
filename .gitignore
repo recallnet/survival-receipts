@@ -3,3 +3,4 @@ dist
 reports
 .DS_Store
 *.local
+survival.config.json
