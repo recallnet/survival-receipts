@@ -1,0 +1,195 @@
+name: Survival Receipts
+description: Run a local git survival scan and publish Markdown and JSON reports.
+
+inputs:
+  since:
+    description: Git date expression for the start of the source-change window.
+    required: true
+    default: 6 months ago
+  until:
+    description: Optional Git date expression for the end of the source-change window.
+    required: false
+    default: ""
+  horizon:
+    description: Survival horizon in days.
+    required: true
+    default: "30"
+  limit:
+    description: Max commits to inspect.
+    required: false
+    default: "250"
+  config:
+    description: Optional path to survival.config.json, relative to the checked-out repo unless absolute.
+    required: false
+    default: ""
+  max-files:
+    description: Skip changes touching more included files than this.
+    required: false
+    default: "25"
+  max-added-lines:
+    description: Skip changes adding more included lines than this.
+    required: false
+    default: "1500"
+  max-file-added-lines:
+    description: Skip changes when one included file adds more lines than this.
+    required: false
+    default: "300"
+  blame-timeout-ms:
+    description: Timeout for each git blame call.
+    required: false
+    default: "15000"
+  copy-detection:
+    description: Use slower git blame copy detection.
+    required: false
+    default: "false"
+  quiet:
+    description: Suppress scanner progress logs.
+    required: false
+    default: "false"
+  upload-artifact:
+    description: Upload the generated reports as a GitHub Actions artifact.
+    required: false
+    default: "true"
+  artifact-name:
+    description: Name for the uploaded report artifact.
+    required: false
+    default: survival-receipts
+  upload-url:
+    description: Optional backend URL that receives the JSON report with HTTP POST.
+    required: false
+    default: ""
+  api-key:
+    description: Optional backend API key. Required when upload-url is set.
+    required: false
+    default: ""
+
+outputs:
+  markdown-path:
+    description: Path to the generated Markdown report on the runner.
+    value: ${{ steps.scan.outputs.markdown-path }}
+  json-path:
+    description: Path to the generated JSON report on the runner.
+    value: ${{ steps.scan.outputs.json-path }}
+  report-dir:
+    description: Directory containing generated reports on the runner.
+    value: ${{ steps.scan.outputs.report-dir }}
+  artifact-url:
+    description: URL for the uploaded report artifact when upload-artifact is true.
+    value: ${{ steps.upload.outputs.artifact-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare pnpm
+      shell: bash
+      run: |
+        set -euo pipefail
+        corepack enable
+        corepack prepare pnpm@11.5.3 --activate
+        pnpm --version
+
+    - name: Install action dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        pnpm install --frozen-lockfile --dir "$GITHUB_ACTION_PATH"
+
+    - name: Run survival scan
+      id: scan
+      shell: bash
+      env:
+        INPUT_SINCE: ${{ inputs.since }}
+        INPUT_UNTIL: ${{ inputs.until }}
+        INPUT_HORIZON: ${{ inputs.horizon }}
+        INPUT_LIMIT: ${{ inputs.limit }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_MAX_FILES: ${{ inputs.max-files }}
+        INPUT_MAX_ADDED_LINES: ${{ inputs.max-added-lines }}
+        INPUT_MAX_FILE_ADDED_LINES: ${{ inputs.max-file-added-lines }}
+        INPUT_BLAME_TIMEOUT_MS: ${{ inputs.blame-timeout-ms }}
+        INPUT_COPY_DETECTION: ${{ inputs.copy-detection }}
+        INPUT_QUIET: ${{ inputs.quiet }}
+        INPUT_UPLOAD_URL: ${{ inputs.upload-url }}
+        INPUT_API_KEY: ${{ inputs.api-key }}
+      run: |
+        set -euo pipefail
+
+        REPORT_DIR="$RUNNER_TEMP/survival-receipts"
+        MARKDOWN_FILE="$REPORT_DIR/survival-report.md"
+        JSON_FILE="$REPORT_DIR/survival-report.json"
+
+        rm -rf "$REPORT_DIR"
+        mkdir -p "$REPORT_DIR"
+
+        if [ "$(git -C "$GITHUB_WORKSPACE" rev-parse --is-shallow-repository)" = "true" ]; then
+          echo "::notice::Repository checkout is shallow. Fetching full history for survival scoring."
+          git -C "$GITHUB_WORKSPACE" fetch --prune --unshallow
+        fi
+
+        ARGS=(
+          scan
+          --repo "$GITHUB_WORKSPACE"
+          --since "$INPUT_SINCE"
+          --horizon "$INPUT_HORIZON"
+          --limit "$INPUT_LIMIT"
+          --max-files "$INPUT_MAX_FILES"
+          --max-added-lines "$INPUT_MAX_ADDED_LINES"
+          --max-file-added-lines "$INPUT_MAX_FILE_ADDED_LINES"
+          --blame-timeout-ms "$INPUT_BLAME_TIMEOUT_MS"
+          --out "$MARKDOWN_FILE"
+          --json-out "$JSON_FILE"
+        )
+
+        if [ -n "$INPUT_UNTIL" ]; then
+          ARGS+=(--until "$INPUT_UNTIL")
+        fi
+
+        if [ -n "$INPUT_CONFIG" ]; then
+          CONFIG_PATH="$INPUT_CONFIG"
+          if [[ "$CONFIG_PATH" != /* ]]; then
+            CONFIG_PATH="$GITHUB_WORKSPACE/$CONFIG_PATH"
+          fi
+          ARGS+=(--config "$CONFIG_PATH")
+        fi
+
+        if [ "$INPUT_COPY_DETECTION" = "true" ]; then
+          ARGS+=(--copy-detection)
+        fi
+
+        if [ "$INPUT_QUIET" = "true" ]; then
+          ARGS+=(--quiet)
+        fi
+
+        pnpm --dir "$GITHUB_ACTION_PATH" survival "${ARGS[@]}"
+
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          cat "$MARKDOWN_FILE" >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        if [ -n "$INPUT_UPLOAD_URL" ]; then
+          if [ -z "$INPUT_API_KEY" ]; then
+            echo "::error::upload-url requires api-key"
+            exit 1
+          fi
+
+          curl -fsS \
+            -X POST \
+            -H "authorization: Bearer $INPUT_API_KEY" \
+            -H "content-type: application/json" \
+            --data-binary @"$JSON_FILE" \
+            "$INPUT_UPLOAD_URL"
+        fi
+
+        {
+          echo "markdown-path=$MARKDOWN_FILE"
+          echo "json-path=$JSON_FILE"
+          echo "report-dir=$REPORT_DIR"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Upload survival reports
+      id: upload
+      if: ${{ inputs.upload-artifact == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.scan.outputs.report-dir }}

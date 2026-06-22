@@ -32,6 +32,29 @@ const writeOutput = (
         : new Error(`Unable to write report: ${String(error)}`)
   });
 
+const writeJsonOutput = (
+  out: string | null,
+  value: unknown,
+  defaultFileName: string
+): Effect.Effect<string | null, Error> =>
+  Effect.tryPromise({
+    try: async () => {
+      if (!out) {
+        return null;
+      }
+
+      const isJsonFile = out.endsWith(".json");
+      const filePath = isJsonFile ? out : path.join(out, defaultFileName);
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`);
+      return filePath;
+    },
+    catch: (error) =>
+      error instanceof Error
+        ? error
+        : new Error(`Unable to write JSON report: ${String(error)}`)
+  });
+
 const program = Effect.gen(function* () {
   const config = parseCliArgs(process.argv);
 
@@ -53,9 +76,18 @@ const program = Effect.gen(function* () {
       markdown,
       "inspection-report.md"
     );
+    const jsonFilePath = yield* writeJsonOutput(
+      config.jsonOut,
+      result,
+      "inspection-report.json"
+    );
 
     if (filePath) {
       process.stdout.write(`Wrote ${filePath}\n`);
+    }
+
+    if (jsonFilePath) {
+      process.stdout.write(`Wrote ${jsonFilePath}\n`);
     }
 
     return;
@@ -77,9 +109,18 @@ const program = Effect.gen(function* () {
   });
   const markdown = renderMarkdownReport(result);
   const filePath = yield* writeOutput(config.out, markdown, "survival-report.md");
+  const jsonFilePath = yield* writeJsonOutput(
+    config.jsonOut,
+    result,
+    "survival-report.json"
+  );
 
   if (filePath) {
     process.stdout.write(`Wrote ${filePath}\n`);
+  }
+
+  if (jsonFilePath) {
+    process.stdout.write(`Wrote ${jsonFilePath}\n`);
   }
 });
 

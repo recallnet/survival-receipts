@@ -13,6 +13,7 @@ export interface CliConfig {
   copyDetection: boolean;
   quiet: boolean;
   out: string | null;
+  jsonOut: string | null;
 }
 
 const readFlag = (args: string[], name: string) => {
@@ -64,7 +65,8 @@ export const parseCliArgs = (argv: string[]): CliConfig => {
       blameTimeoutMs: 15000,
       copyDetection: false,
       quiet: false,
-      out: null
+      out: null,
+      jsonOut: null
     };
   }
 
@@ -102,7 +104,8 @@ export const parseCliArgs = (argv: string[]): CliConfig => {
     ),
     copyDetection: hasFlag(args, "--copy-detection"),
     quiet: hasFlag(args, "--quiet"),
-    out: readFlag(args, "--out")
+    out: readFlag(args, "--out"),
+    jsonOut: readFlag(args, "--json-out")
   };
 };
 
@@ -130,5 +133,6 @@ export const helpText = [
   "  --copy-detection   Use slower git blame copy detection. Defaults to move detection only.",
   "  --quiet             Suppress progress logs.",
   "  --out <path>        Markdown file or directory. Prints to stdout when omitted.",
+  "  --json-out <path>   JSON file or directory. Omit to skip JSON output.",
   "  --help             Show this help text."
 ].join("\n");

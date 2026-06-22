@@ -60,6 +60,17 @@ report from git history:
 pnpm survival scan --repo /path/to/repo --since 2025-12-01 --horizon 30 --out reports/my-repo
 ```
 
+Add `--json-out` when another tool needs the raw scan result:
+
+```bash
+pnpm survival scan \
+  --repo /path/to/repo \
+  --since 2025-12-01 \
+  --horizon 30 \
+  --out reports/my-repo \
+  --json-out reports/my-repo
+```
+
 For a first pass on a larger repo, start smaller:
 
 ```bash
@@ -191,6 +202,114 @@ Estimated AI cost is a placeholder based on changed lines and file count. It is
 there so the report has the shape of a receipt, not because the scanner knows
 real provider spend yet. Replace it with Claude Code logs, gateway traces, or
 provider exports when those are available.
+
+## GitHub Action
+
+The GitHub Action in [action.yml](./action.yml) wraps the same CLI. It runs in
+GitHub Actions against the checked-out repo, writes the Markdown report to the
+job summary, uploads Markdown and JSON reports as artifacts, and can optionally
+POST the JSON report to a backend.
+
+Once this repo is public at `asutula/survival-receipts`, users install the
+action by referencing a tag or branch from their workflow:
+
+```yaml
+- uses: asutula/survival-receipts@v0
+```
+
+Publish a stable major-version tag when cutting the first usable release:
+
+```bash
+git tag v0.1.0
+git tag v0
+git push origin v0.1.0 v0
+```
+
+Use it first as a manual backtest:
+
+```yaml
+name: Survival backtest
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        required: true
+        default: "2026-01-01"
+      until:
+        required: false
+        default: ""
+      horizon:
+        required: true
+        default: "30"
+
+jobs:
+  survival:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: asutula/survival-receipts@v0
+        with:
+          since: ${{ inputs.since }}
+          until: ${{ inputs.until }}
+          horizon: ${{ inputs.horizon }}
+```
+
+The other useful mode is a scheduled report over a mature window:
+
+```yaml
+name: Weekly survival report
+
+on:
+  schedule:
+    - cron: "0 14 * * 1"
+
+jobs:
+  survival:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: asutula/survival-receipts@v0
+        with:
+          since: "90 days ago"
+          until: "30 days ago"
+          horizon: "30"
+          artifact-name: weekly-survival-report
+```
+
+For a 30 day horizon, the scheduled example stops at `30 days ago` so every
+scored change has had time to survive or die. A PR-time action is less useful
+for this metric because a newly merged PR cannot have a 30 day survival score
+yet. A later version can record a pending receipt on merge, then score it after
+the horizon matures.
+
+To connect the action to a hosted app, pass a backend upload URL and API key:
+
+```yaml
+- uses: asutula/survival-receipts@v0
+  with:
+    since: "90 days ago"
+    until: "30 days ago"
+    horizon: "30"
+    upload-url: https://app.example.com/api/survival-runs
+    api-key: ${{ secrets.SURVIVAL_API_KEY }}
+```
+
+The backend receives the JSON report. Source code stays in the GitHub Actions
+runner. If the runner is self-hosted, the scan never leaves the customer's
+infrastructure except for the derived JSON data they choose to upload.
 
 ## Important concepts
 
