@@ -210,11 +210,11 @@ GitHub Actions against the checked-out repo, writes the Markdown report to the
 job summary, uploads Markdown and JSON reports as artifacts, and can optionally
 POST the JSON report to a backend.
 
-Once this repo is public at `asutula/survival-receipts`, users install the
+Once this repo is public at `recallnet/survival-receipts`, users install the
 action by referencing a tag or branch from their workflow:
 
 ```yaml
-- uses: asutula/survival-receipts@v0
+- uses: recallnet/survival-receipts@v0
 ```
 
 Publish a stable major-version tag when cutting the first usable release:
@@ -254,7 +254,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: asutula/survival-receipts@v0
+      - uses: recallnet/survival-receipts@v0
         with:
           since: ${{ inputs.since }}
           until: ${{ inputs.until }}
@@ -281,7 +281,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: asutula/survival-receipts@v0
+      - uses: recallnet/survival-receipts@v0
         with:
           since: "90 days ago"
           until: "30 days ago"
@@ -298,7 +298,7 @@ the horizon matures.
 To connect the action to a hosted app, pass a backend upload URL and API key:
 
 ```yaml
-- uses: asutula/survival-receipts@v0
+- uses: recallnet/survival-receipts@v0
   with:
     since: "90 days ago"
     until: "30 days ago"
