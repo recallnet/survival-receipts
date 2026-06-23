@@ -1,10 +1,10 @@
 export interface CliConfig {
   command: "scan" | "inspect" | "help";
   repo: string;
-  since: string;
-  until: string | null;
+  asOf: string | null;
   configPath: string | null;
-  horizonDays: number;
+  survivalDays: number;
+  windowDays: number;
   limit: number;
   maxFilesPerChange: number;
   maxAddedLinesPerChange: number;
@@ -54,10 +54,10 @@ export const parseCliArgs = (argv: string[]): CliConfig => {
     return {
       command: "help",
       repo: ".",
-      since: "6 months ago",
-      until: null,
+      asOf: null,
       configPath: null,
-      horizonDays: 30,
+      survivalDays: 30,
+      windowDays: 30,
       limit: 250,
       maxFilesPerChange: 25,
       maxAddedLinesPerChange: 1500,
@@ -74,13 +74,39 @@ export const parseCliArgs = (argv: string[]): CliConfig => {
     throw new Error(`Unknown command: ${command}`);
   }
 
+  if (hasFlag(args, "--since")) {
+    throw new Error(
+      "--since was removed. Use --as-of, --survival-days, and --window-days."
+    );
+  }
+
+  if (hasFlag(args, "--horizon")) {
+    throw new Error("--horizon was removed. Use --survival-days.");
+  }
+
+  if (hasFlag(args, "--until")) {
+    throw new Error("--until was renamed to --as-of.");
+  }
+
+  if (hasFlag(args, "--lookback")) {
+    throw new Error("--lookback was split into --survival-days and --window-days.");
+  }
+
   return {
     command,
     repo: readFlag(args, "--repo") ?? ".",
-    since: readFlag(args, "--since") ?? "6 months ago",
-    until: readFlag(args, "--until"),
+    asOf: readFlag(args, "--as-of"),
     configPath: readFlag(args, "--config"),
-    horizonDays: parsePositiveInteger(readFlag(args, "--horizon"), 30, "--horizon"),
+    survivalDays: parsePositiveInteger(
+      readFlag(args, "--survival-days"),
+      30,
+      "--survival-days"
+    ),
+    windowDays: parsePositiveInteger(
+      readFlag(args, "--window-days"),
+      30,
+      "--window-days"
+    ),
     limit: parsePositiveInteger(readFlag(args, "--limit"), 250, "--limit"),
     maxFilesPerChange: parsePositiveInteger(
       readFlag(args, "--max-files"),
@@ -113,15 +139,17 @@ export const helpText = [
   "Survival Receipts CLI",
   "",
   "Usage:",
-  "  pnpm survival scan --repo . --since 2025-12-01 --horizon 30 --out reports/demo",
-  "  pnpm survival inspect --repo . --since 2025-12-01 --until 2026-01-31",
+  "  pnpm survival scan --repo . --survival-days 30 --window-days 30 --out reports/demo",
+  "  pnpm survival inspect --repo . --as-of 2026-06-01 --survival-days 30 --window-days 7",
   "",
   "Options:",
   "  --repo <path>       Git repo to scan. Defaults to the current directory.",
-  "  --since <date>      Git date expression passed to git log. Defaults to '6 months ago'.",
-  "  --until <date>      Optional end date passed to git log.",
+  "  --as-of <date>      Report cutoff. Defaults to the current time.",
   "  --config <path>     Config file. Defaults to survival.config.json in the repo root when present.",
-  "  --horizon <days>    Survival horizon in days. Defaults to 30.",
+  "  --survival-days <days>",
+  "                      Judge each change after this many days. Defaults to 30.",
+  "  --window-days <days>",
+  "                      Include this many days of mature changes. Defaults to 30.",
   "  --limit <count>     Max commits to inspect. Defaults to 250.",
   "  --max-files <count> Skip changes touching more included files. Defaults to 25.",
   "  --max-added-lines <count>",

@@ -12,8 +12,11 @@ import { extractPrNumber } from "./scanner";
 
 export interface InspectOptions {
   repo: string;
-  since: string;
-  until: string | null;
+  asOf: string;
+  changeWindowStart: string;
+  changeWindowEnd: string;
+  survivalDays: number;
+  windowDays: number;
   limit: number;
 }
 
@@ -39,8 +42,11 @@ export interface InspectResult {
   repoRoot: string;
   repoName: string;
   headSha: string;
-  since: string;
-  until: string | null;
+  asOf: string;
+  changeWindowStart: string;
+  changeWindowEnd: string;
+  survivalDays: number;
+  windowDays: number;
   limit: number;
   commitsSeen: number;
   contributors: ContributorSummary[];
@@ -162,8 +168,8 @@ export const inspectRepository = (
     const root = yield* repoRoot(options.repo);
     const head = yield* headSha(root);
     const shas = yield* listCommitShas(root, {
-      since: options.since,
-      until: options.until,
+      since: options.changeWindowStart,
+      until: options.changeWindowEnd,
       limit: options.limit
     });
     const commits: GitCommit[] = [];
@@ -177,12 +183,14 @@ export const inspectRepository = (
       repoRoot: root,
       repoName: path.basename(root),
       headSha: head,
-      since: options.since,
-      until: options.until,
+      asOf: options.asOf,
+      changeWindowStart: options.changeWindowStart,
+      changeWindowEnd: options.changeWindowEnd,
+      survivalDays: options.survivalDays,
+      windowDays: options.windowDays,
       limit: options.limit,
       commitsSeen: commits.length,
       contributors: summarizeContributors(commits),
       pullRequests: summarizePullRequests(commits)
     };
   });
-

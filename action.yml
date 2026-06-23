@@ -2,16 +2,16 @@ name: Survival Receipts
 description: Run a local git survival scan and publish Markdown and JSON reports.
 
 inputs:
-  since:
-    description: Git date expression for the start of the source-change window.
-    required: true
-    default: 6 months ago
-  until:
-    description: Optional Git date expression for the end of the source-change window.
+  as-of:
+    description: Optional report cutoff date or timestamp. Defaults to the current time.
     required: false
     default: ""
-  horizon:
-    description: Survival horizon in days.
+  survival-days:
+    description: Judge each change after this many days.
+    required: true
+    default: "30"
+  window-days:
+    description: Include this many days of mature changes.
     required: true
     default: "30"
   limit:
@@ -98,9 +98,9 @@ runs:
       id: scan
       shell: bash
       env:
-        INPUT_SINCE: ${{ inputs.since }}
-        INPUT_UNTIL: ${{ inputs.until }}
-        INPUT_HORIZON: ${{ inputs.horizon }}
+        INPUT_AS_OF: ${{ inputs.as-of }}
+        INPUT_SURVIVAL_DAYS: ${{ inputs.survival-days }}
+        INPUT_WINDOW_DAYS: ${{ inputs.window-days }}
         INPUT_LIMIT: ${{ inputs.limit }}
         INPUT_CONFIG: ${{ inputs.config }}
         INPUT_MAX_FILES: ${{ inputs.max-files }}
@@ -129,8 +129,8 @@ runs:
         ARGS=(
           scan
           --repo "$GITHUB_WORKSPACE"
-          --since "$INPUT_SINCE"
-          --horizon "$INPUT_HORIZON"
+          --survival-days "$INPUT_SURVIVAL_DAYS"
+          --window-days "$INPUT_WINDOW_DAYS"
           --limit "$INPUT_LIMIT"
           --max-files "$INPUT_MAX_FILES"
           --max-added-lines "$INPUT_MAX_ADDED_LINES"
@@ -140,8 +140,8 @@ runs:
           --json-out "$JSON_FILE"
         )
 
-        if [ -n "$INPUT_UNTIL" ]; then
-          ARGS+=(--until "$INPUT_UNTIL")
+        if [ -n "$INPUT_AS_OF" ]; then
+          ARGS+=(--as-of "$INPUT_AS_OF")
         fi
 
         if [ -n "$INPUT_CONFIG" ]; then

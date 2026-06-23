@@ -2,6 +2,7 @@ import path from "node:path";
 import { Effect, Either } from "effect";
 import { loadSurvivalConfig, type AiOverrideConfig } from "./config";
 import { detectAiAttribution, type AiDetection } from "./markers";
+import { resolveScanWindow } from "./window";
 import {
   blamePorcelain,
   commitBefore,
@@ -17,10 +18,10 @@ import {
 
 export interface ScanOptions {
   repo: string;
-  since: string;
-  until: string | null;
+  asOf: string | null;
   configPath: string | null;
-  horizonDays: number;
+  survivalDays: number;
+  windowDays: number;
   limit: number;
   maxFilesPerChange: number;
   maxAddedLinesPerChange: number;
@@ -77,7 +78,7 @@ export interface ScannedChange {
   deletedLines: number;
   changedLines: number;
   estimatedAiCostUsd: number;
-  horizonDate: string | null;
+  survivalDate: string | null;
   targetSha: string | null;
   survivingLines: number;
   survivalRatio: number | null;
@@ -92,12 +93,14 @@ export interface ScanResult {
   repoRoot: string;
   repoName: string;
   headSha: string;
-  since: string;
-  until: string | null;
+  asOf: string;
+  changeWindowStart: string;
+  changeWindowEnd: string;
   configPath: string | null;
   configuredAiGithubUsernames: string[];
   configuredAiPrNumbers: number[];
-  horizonDays: number;
+  survivalDays: number;
+  windowDays: number;
   limit: number;
   maxFilesPerChange: number;
   maxAddedLinesPerChange: number;
@@ -222,8 +225,9 @@ const scoreFile = (
 const scanCommit = (
   repo: string,
   commit: GitCommit,
-  options: Omit<ScanOptions, "repo" | "since" | "until" | "configPath" | "limit"> & {
+  options: Omit<ScanOptions, "repo" | "asOf" | "configPath" | "limit"> & {
     aiOverrides: AiOverrideConfig;
+    asOf: string;
   },
   progressContext: { index: number; total: number }
 ): Effect.Effect<ScannedChange, Error> =>
@@ -253,7 +257,7 @@ const scanCommit = (
       deletedLines?: number;
       changedLines?: number;
       estimatedAiCostUsd?: number;
-      horizonDate?: string | null;
+      survivalDate?: string | null;
       targetSha?: string | null;
       skipReason: string;
     }): ScannedChange => ({
@@ -265,7 +269,7 @@ const scanCommit = (
       deletedLines: input.deletedLines ?? 0,
       changedLines: input.changedLines ?? 0,
       estimatedAiCostUsd: input.estimatedAiCostUsd ?? 0,
-      horizonDate: input.horizonDate ?? null,
+      survivalDate: input.survivalDate ?? null,
       targetSha: input.targetSha ?? null,
       survivingLines: 0,
       survivalRatio: null,
@@ -343,23 +347,24 @@ const scanCommit = (
       });
     }
 
-    const horizonDate = addDays(new Date(commit.committedAt), options.horizonDays);
+    const survivalDate = addDays(new Date(commit.committedAt), options.survivalDays);
+    const asOf = new Date(options.asOf);
 
-    if (horizonDate.getTime() > Date.now()) {
+    if (survivalDate.getTime() > asOf.getTime()) {
       return skipped({
         ...skipShared,
-        horizonDate: horizonDate.toISOString(),
-        skipReason: `commit has not reached ${options.horizonDays} day horizon`
+        survivalDate: survivalDate.toISOString(),
+        skipReason: `commit has not reached ${options.survivalDays} day survival age`
       });
     }
 
-    const targetSha = yield* commitBefore(repo, horizonDate.toISOString());
+    const targetSha = yield* commitBefore(repo, survivalDate.toISOString());
 
     if (!targetSha) {
       return skipped({
         ...skipShared,
-        horizonDate: horizonDate.toISOString(),
-        skipReason: "no commit exists at the survival horizon"
+        survivalDate: survivalDate.toISOString(),
+        skipReason: "no commit exists at the survival date"
       });
     }
 
@@ -389,7 +394,7 @@ const scanCommit = (
       if (Either.isLeft(scoredFile)) {
         return skipped({
           ...skipShared,
-          horizonDate: horizonDate.toISOString(),
+          survivalDate: survivalDate.toISOString(),
           targetSha,
           skipReason: `git blame failed for ${file.path}: ${scoredFile.left.message}`
         });
@@ -410,7 +415,7 @@ const scanCommit = (
       deletedLines,
       changedLines,
       estimatedAiCostUsd,
-      horizonDate: horizonDate.toISOString(),
+      survivalDate: survivalDate.toISOString(),
       targetSha,
       survivingLines,
       survivalRatio: round(survivalRatio, 4),
@@ -427,9 +432,14 @@ export const scanRepository = (
     const root = yield* repoRoot(options.repo);
     const config = yield* loadSurvivalConfig(root, options.configPath);
     const head = yield* headSha(root);
+    const window = resolveScanWindow(
+      options.asOf,
+      options.survivalDays,
+      options.windowDays
+    );
     const shas = yield* listCommitShas(root, {
-      since: options.since,
-      until: options.until,
+      since: window.changeWindowStart,
+      until: window.changeWindowEnd,
       limit: options.limit
     });
     const changes: ScannedChange[] = [];
@@ -448,13 +458,15 @@ export const scanRepository = (
         root,
         commit,
         {
-          horizonDays: options.horizonDays,
+          survivalDays: options.survivalDays,
+          windowDays: options.windowDays,
           maxFilesPerChange: options.maxFilesPerChange,
           maxAddedLinesPerChange: options.maxAddedLinesPerChange,
           maxFileAddedLines: options.maxFileAddedLines,
           blameTimeoutMs: options.blameTimeoutMs,
           copyDetection: options.copyDetection,
           aiOverrides: config.ai,
+          asOf: window.asOf,
           onProgress: options.onProgress
         },
         { index: index + 1, total: shas.length }
@@ -479,12 +491,14 @@ export const scanRepository = (
       repoRoot: root,
       repoName: path.basename(root),
       headSha: head,
-      since: options.since,
-      until: options.until,
+      asOf: window.asOf,
+      changeWindowStart: window.changeWindowStart,
+      changeWindowEnd: window.changeWindowEnd,
       configPath: config.path,
       configuredAiGithubUsernames: config.ai.githubUsernames,
       configuredAiPrNumbers: config.ai.prNumbers,
-      horizonDays: options.horizonDays,
+      survivalDays: options.survivalDays,
+      windowDays: options.windowDays,
       limit: options.limit,
       maxFilesPerChange: options.maxFilesPerChange,
       maxAddedLinesPerChange: options.maxAddedLinesPerChange,

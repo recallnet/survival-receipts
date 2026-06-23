@@ -7,6 +7,7 @@ import { inspectRepository } from "./inspect";
 import { renderInspectReport } from "./inspectReport";
 import { renderMarkdownReport } from "./report";
 import { scanRepository, type ScanProgress } from "./scanner";
+import { resolveScanWindow } from "./window";
 
 const writeOutput = (
   out: string | null,
@@ -64,10 +65,18 @@ const program = Effect.gen(function* () {
   }
 
   if (config.command === "inspect") {
+    const window = resolveScanWindow(
+      config.asOf,
+      config.survivalDays,
+      config.windowDays
+    );
     const result = yield* inspectRepository({
       repo: config.repo,
-      since: config.since,
-      until: config.until,
+      asOf: window.asOf,
+      changeWindowStart: window.changeWindowStart,
+      changeWindowEnd: window.changeWindowEnd,
+      survivalDays: config.survivalDays,
+      windowDays: config.windowDays,
       limit: config.limit
     });
     const markdown = renderInspectReport(result);
@@ -95,10 +104,10 @@ const program = Effect.gen(function* () {
 
   const result = yield* scanRepository({
     repo: config.repo,
-    since: config.since,
-    until: config.until,
+    asOf: config.asOf,
     configPath: config.configPath,
-    horizonDays: config.horizonDays,
+    survivalDays: config.survivalDays,
+    windowDays: config.windowDays,
     limit: config.limit,
     maxFilesPerChange: config.maxFilesPerChange,
     maxAddedLinesPerChange: config.maxAddedLinesPerChange,

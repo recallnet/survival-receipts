@@ -57,7 +57,7 @@ The first week-one build target is a local CLI that produces a static Markdown
 report from git history:
 
 ```bash
-pnpm survival scan --repo /path/to/repo --since 2025-12-01 --horizon 30 --out reports/my-repo
+pnpm survival scan --repo /path/to/repo --survival-days 30 --window-days 30 --out reports/my-repo
 ```
 
 Add `--json-out` when another tool needs the raw scan result:
@@ -65,8 +65,8 @@ Add `--json-out` when another tool needs the raw scan result:
 ```bash
 pnpm survival scan \
   --repo /path/to/repo \
-  --since 2025-12-01 \
-  --horizon 30 \
+  --survival-days 30 \
+  --window-days 30 \
   --out reports/my-repo \
   --json-out reports/my-repo
 ```
@@ -74,7 +74,12 @@ pnpm survival scan \
 For a first pass on a larger repo, start smaller:
 
 ```bash
-pnpm survival scan --repo /path/to/repo --since 2025-12-01 --horizon 30 --limit 50 --out reports/my-repo
+pnpm survival scan \
+  --repo /path/to/repo \
+  --survival-days 30 \
+  --window-days 30 \
+  --limit 50 \
+  --out reports/my-repo
 ```
 
 Use `inspect` when you want to build an attribution config or audit what the
@@ -83,27 +88,33 @@ CLI can see before running a survival scan:
 ```bash
 pnpm survival inspect \
   --repo /path/to/repo \
-  --since 2026-01-01 \
-  --until 2026-03-31
+  --as-of 2026-06-01 \
+  --survival-days 30 \
+  --window-days 30
 ```
 
 It prints a Markdown inventory of unique commit authors, detected GitHub
 usernames from noreply emails, and PR numbers with inferred titles. It does not
 run blame or score survival.
 
-Use `--until` when you want a bounded source-change window:
+`--as-of` is the report cutoff and defaults to the current time.
+`--survival-days` says how old a change must be before the scanner judges it.
+`--window-days` says how many days of mature source changes to include.
+
+With `--as-of 2026-06-01 --survival-days 30 --window-days 7`, the scanner looks
+at changes from 2026-04-25 through 2026-05-02. Those are the latest 7 days of
+changes that had a full 30 days to survive by 2026-06-01.
+
+Use `--as-of` when you want to backtest as of a past date:
 
 ```bash
 pnpm survival scan \
   --repo /path/to/repo \
-  --since 2026-01-01 \
-  --until 2026-03-31 \
-  --horizon 30 \
+  --as-of 2026-06-01 \
+  --survival-days 30 \
+  --window-days 30 \
   --out reports/q1
 ```
-
-`--since` and `--until` choose which commits enter the report. The scanner still
-looks forward by `--horizon` from each selected commit to measure survival.
 
 Use `survival.config.json` in the scanned repo when deterministic markers miss
 AI-authored work you already know about:
@@ -125,8 +136,8 @@ repo root. You can also pass a file explicitly:
 pnpm survival scan \
   --repo /path/to/repo \
   --config /path/to/survival.config.json \
-  --since 2026-01-01 \
-  --horizon 30 \
+  --survival-days 30 \
+  --window-days 30 \
   --out reports/configured
 ```
 
@@ -145,8 +156,8 @@ The first scanner uses added-line survival:
 surviving added lines / added lines
 ```
 
-For each single-parent commit, it finds the commit at the survival horizon and
-runs `git blame -M`. A line survives when the horizon blame still
+For each single-parent commit, it finds the commit at the survival date and
+runs `git blame -M`. A line survives when the survival-date blame still
 attributes it to the source commit.
 
 The report compares deterministic AI-marked changes against human changes in
@@ -185,8 +196,8 @@ needs different limits:
 ```bash
 pnpm survival scan \
   --repo /path/to/repo \
-  --since 2025-12-01 \
-  --horizon 30 \
+  --survival-days 30 \
+  --window-days 30 \
   --max-files 60 \
   --max-added-lines 5000 \
   --max-file-added-lines 1200 \
@@ -233,15 +244,15 @@ name: Survival backtest
 on:
   workflow_dispatch:
     inputs:
-      since:
-        required: true
-        default: "2026-01-01"
-      until:
+      as-of:
         required: false
         default: ""
-      horizon:
+      survival-days:
         required: true
         default: "30"
+      window-days:
+        required: true
+        default: "7"
 
 jobs:
   survival:
@@ -256,9 +267,9 @@ jobs:
 
       - uses: recallnet/survival-receipts@v0
         with:
-          since: ${{ inputs.since }}
-          until: ${{ inputs.until }}
-          horizon: ${{ inputs.horizon }}
+          as-of: ${{ inputs.as-of }}
+          survival-days: ${{ inputs.survival-days }}
+          window-days: ${{ inputs.window-days }}
 ```
 
 The other useful mode is a scheduled report over a mature window:
@@ -283,26 +294,25 @@ jobs:
 
       - uses: recallnet/survival-receipts@v0
         with:
-          since: "90 days ago"
-          until: "30 days ago"
-          horizon: "30"
+          survival-days: "30"
+          window-days: "7"
           artifact-name: weekly-survival-report
 ```
 
-For a 30 day horizon, the scheduled example stops at `30 days ago` so every
-scored change has had time to survive or die. A PR-time action is less useful
-for this metric because a newly merged PR cannot have a 30 day survival score
-yet. A later version can record a pending receipt on merge, then score it after
-the horizon matures.
+With `survival-days: "30"` and `window-days: "7"`, each weekly run scores the
+latest 7 days of changes that had 30 days to survive. That keeps newly merged
+code out of the report until it is mature enough to judge. A PR-time action is
+less useful for this metric because a newly merged PR cannot have a 30 day
+survival score yet. A later version can record a pending receipt on merge, then
+score it once the survival period matures.
 
 To connect the action to a hosted app, pass a backend upload URL and API key:
 
 ```yaml
 - uses: recallnet/survival-receipts@v0
   with:
-    since: "90 days ago"
-    until: "30 days ago"
-    horizon: "30"
+    survival-days: "30"
+    window-days: "7"
     upload-url: https://app.example.com/api/survival-runs
     api-key: ${{ secrets.SURVIVAL_API_KEY }}
 ```

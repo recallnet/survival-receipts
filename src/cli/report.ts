@@ -283,12 +283,13 @@ export const renderMarkdownReport = (result: ScanResult) => {
     "",
     `- Repo: ${result.repoRoot}`,
     `- HEAD: ${result.headSha.slice(0, 12)}`,
-    `- Since: ${result.since}`,
-    `- Until: ${result.until ?? "HEAD"}`,
+    `- As of: ${result.asOf}`,
+    `- Survival days: ${result.survivalDays}`,
+    `- Window days: ${result.windowDays}`,
+    `- Mature change window: ${result.changeWindowStart} to ${result.changeWindowEnd}`,
     `- Config: ${result.configPath ?? "none"}`,
     `- Configured AI GitHub usernames: ${result.configuredAiGithubUsernames.length}`,
     `- Configured AI PR numbers: ${result.configuredAiPrNumbers.length}`,
-    `- Horizon: ${result.horizonDays} days`,
     `- Commit limit: ${result.limit}`,
     `- Max files per change: ${result.maxFilesPerChange}`,
     `- Max added lines per change: ${result.maxAddedLinesPerChange}`,
@@ -342,10 +343,11 @@ export const renderMarkdownReport = (result: ScanResult) => {
     [
       "This report uses local git facts only.",
       "A scored change must be a single-parent commit with at least one included added line.",
-      `For each scored change, the scanner finds the commit at the ${result.horizonDays} day horizon and runs git blame with move detection${
+      `For each scored change, the scanner finds the commit at the ${result.survivalDays} day survival date and runs git blame with move detection${
         result.copyDetection ? " and copy detection" : ""
       }.`,
-      "A line survives when the horizon blame still attributes it to the source commit.",
+      "A line survives when the survival-date blame still attributes it to the source commit.",
+      "The mature change window ends survival-days before the report cutoff, so every scored change has had a full survival period.",
       "Size buckets compare AI and human changes with similar added-line counts: tiny is 1-20 lines, small is 21-100, medium is 101-500, and large is 501 or more.",
       "Generated files, lockfiles, build output, vendored code, sourcemaps, snapshots, binary assets, and media files are excluded.",
       "Merge commits are skipped for now because proper support needs branch reconstruction.",

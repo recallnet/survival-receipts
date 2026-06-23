@@ -147,10 +147,10 @@ describe("CLI scanner", () => {
       const result = await Effect.runPromise(
         scanRepository({
           repo,
-          since: "2026-01-01",
-          until: null,
+          asOf: "2026-02-03T12:00:00Z",
           configPath: null,
-          horizonDays: 30,
+          survivalDays: 30,
+          windowDays: 30,
           limit: 25,
           maxFilesPerChange: 40,
           maxAddedLinesPerChange: 2500,
@@ -184,7 +184,7 @@ describe("CLI scanner", () => {
     }
   });
 
-  it("can select source changes with both since and until", async () => {
+  it("selects the mature source window from as-of, survival days, and window days", async () => {
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), "survival-window-"));
 
     try {
@@ -204,10 +204,10 @@ describe("CLI scanner", () => {
       const result = await Effect.runPromise(
         scanRepository({
           repo,
-          since: "2026-01-01",
-          until: "2026-01-31",
+          asOf: "2026-02-03T12:00:00Z",
           configPath: null,
-          horizonDays: 1,
+          survivalDays: 30,
+          windowDays: 30,
           limit: 25,
           maxFilesPerChange: 40,
           maxAddedLinesPerChange: 2500,
@@ -217,9 +217,12 @@ describe("CLI scanner", () => {
         })
       );
 
-      expect(result.until).toBe("2026-01-31");
+      expect(result.asOf).toBe("2026-02-03T12:00:00.000Z");
+      expect(result.changeWindowStart).toBe("2025-12-05T12:00:00.000Z");
+      expect(result.changeWindowEnd).toBe("2026-01-04T12:00:00.000Z");
       expect(result.changes.map((change) => change.commit.subject)).toEqual([
-        "first change (#1)"
+        "first change (#1)",
+        "initial"
       ]);
     } finally {
       await fs.rm(repo, { recursive: true, force: true });
@@ -247,10 +250,10 @@ describe("CLI scanner", () => {
       const result = await Effect.runPromise(
         scanRepository({
           repo,
-          since: "2026-01-01",
-          until: null,
+          asOf: "2026-01-04T12:00:00Z",
           configPath: null,
-          horizonDays: 1,
+          survivalDays: 1,
+          windowDays: 1,
           limit: 25,
           maxFilesPerChange: 40,
           maxAddedLinesPerChange: 2500,

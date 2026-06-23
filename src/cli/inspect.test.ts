@@ -101,14 +101,17 @@ describe("CLI inspect command", () => {
       const result = await Effect.runPromise(
         inspectRepository({
           repo,
-          since: "2026-01-01",
-          until: "2026-01-31",
+          asOf: "2026-02-02T12:00:00.000Z",
+          changeWindowStart: "2025-12-04T12:00:00.000Z",
+          changeWindowEnd: "2026-01-03T12:00:00.000Z",
+          survivalDays: 30,
+          windowDays: 30,
           limit: 25
         })
       );
       const report = renderInspectReport(result);
 
-      expect(result.commitsSeen).toBe(2);
+      expect(result.commitsSeen).toBe(3);
       expect(result.contributors).toHaveLength(2);
       expect(result.pullRequests.map((pr) => pr.number)).toEqual([13, 12]);
       expect(result.pullRequests.find((pr) => pr.number === 12)?.title).toBe(
