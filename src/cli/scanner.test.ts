@@ -31,6 +31,11 @@ const commitAll = async (repo: string, message: string[], date: string) => {
   });
 };
 
+const readHead = async (repo: string) => {
+  const { stdout } = await execFileAsync("git", ["-C", repo, "rev-parse", "HEAD"]);
+  return stdout.trim();
+};
+
 describe("CLI scanner", () => {
   it("detects deterministic AI markers", () => {
     const detection = detectAiAttribution({
@@ -149,6 +154,8 @@ describe("CLI scanner", () => {
           repo,
           asOf: "2026-02-03T12:00:00Z",
           configPath: null,
+          fromCommit: null,
+          toCommit: null,
           survivalDays: [30],
           windowDays: 30,
           limit: 25,
@@ -206,6 +213,8 @@ describe("CLI scanner", () => {
           repo,
           asOf: "2026-02-03T12:00:00Z",
           configPath: null,
+          fromCommit: null,
+          toCommit: null,
           survivalDays: [30],
           windowDays: 30,
           limit: 25,
@@ -252,6 +261,8 @@ describe("CLI scanner", () => {
           repo,
           asOf: "2026-01-04T12:00:00Z",
           configPath: null,
+          fromCommit: null,
+          toCommit: null,
           survivalDays: [1],
           windowDays: 1,
           limit: 25,
@@ -304,6 +315,8 @@ describe("CLI scanner", () => {
           repo,
           asOf: "2026-02-01T12:00:00Z",
           configPath: null,
+          fromCommit: null,
+          toCommit: null,
           survivalDays: [1, 7],
           windowDays: 30,
           limit: 25,
@@ -325,6 +338,63 @@ describe("CLI scanner", () => {
       ]);
       expect(aiChange?.checkpoints[0]?.survivingLines).toBe(2);
       expect(aiChange?.checkpoints[1]?.survivingLines).toBe(1);
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("scans an explicit commit cursor range", async () => {
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "survival-range-"));
+
+    try {
+      await execFileAsync("git", ["init", repo]);
+      await git(repo, ["config", "user.name", "Test User"]);
+      await git(repo, ["config", "user.email", "test@example.com"]);
+
+      await fs.writeFile(path.join(repo, "app.ts"), "base\n");
+      await commitAll(repo, ["initial"], "2026-01-01T12:00:00Z");
+      const initialSha = await readHead(repo);
+
+      await fs.writeFile(path.join(repo, "app.ts"), "base\nfirst\n");
+      await commitAll(repo, ["first change (#1)"], "2026-01-02T12:00:00Z");
+
+      await fs.writeFile(path.join(repo, "app.ts"), "base\nfirst\nsecond\n");
+      await commitAll(repo, ["second change (#2)"], "2026-01-03T12:00:00Z");
+      const secondSha = await readHead(repo);
+
+      await fs.writeFile(
+        path.join(repo, "app.ts"),
+        "base\nfirst\nsecond\nthird\n"
+      );
+      await commitAll(repo, ["third change (#3)"], "2026-01-04T12:00:00Z");
+
+      const result = await Effect.runPromise(
+        scanRepository({
+          repo,
+          asOf: "2026-01-10T12:00:00Z",
+          configPath: null,
+          fromCommit: initialSha,
+          toCommit: secondSha,
+          survivalDays: [1],
+          windowDays: 30,
+          limit: 25,
+          maxFilesPerChange: 40,
+          maxAddedLinesPerChange: 2500,
+          maxFileAddedLines: 750,
+          blameTimeoutMs: 30000,
+          copyDetection: false
+        })
+      );
+
+      expect(result.sourceMode).toBe("range");
+      expect(result.sourceFromSha).toBe(initialSha);
+      expect(result.sourceToSha).toBe(secondSha);
+      expect(result.changes.map((change) => change.commit.subject)).toEqual([
+        "first change (#1)",
+        "second change (#2)"
+      ]);
+      expect(result.changeWindowStart).toBe("2026-01-02T12:00:00Z");
+      expect(result.changeWindowEnd).toBe("2026-01-03T12:00:00Z");
     } finally {
       await fs.rm(repo, { recursive: true, force: true });
     }

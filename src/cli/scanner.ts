@@ -2,16 +2,18 @@ import path from "node:path";
 import { Effect, Either } from "effect";
 import { loadSurvivalConfig, type AiOverrideConfig } from "./config";
 import { detectAiAttribution, type AiDetection } from "./markers";
-import { resolveScanWindow } from "./window";
+import { parseAsOf, resolveScanWindow } from "./window";
 import {
   blamePorcelain,
   commitBefore,
   fileExistsAt,
   headSha,
   listCommitShas,
+  listCommitShasInRange,
   readCommit,
   readNumstat,
   repoRoot,
+  revParse,
   type FileChange,
   type GitCommit
 } from "./git";
@@ -20,6 +22,8 @@ export interface ScanOptions {
   repo: string;
   asOf: string | null;
   configPath: string | null;
+  fromCommit: string | null;
+  toCommit: string | null;
   survivalDays: number[];
   windowDays: number;
   limit: number;
@@ -103,6 +107,9 @@ export interface ScanResult {
   asOf: string;
   changeWindowStart: string;
   changeWindowEnd: string;
+  sourceMode: "window" | "range";
+  sourceFromSha: string | null;
+  sourceToSha: string | null;
   configPath: string | null;
   configuredAiGithubUsernames: string[];
   configuredAiPrNumbers: number[];
@@ -328,7 +335,10 @@ const scoreCheckpoint = (
 const scanCommit = (
   repo: string,
   commit: GitCommit,
-  options: Omit<ScanOptions, "repo" | "asOf" | "configPath" | "limit"> & {
+  options: Omit<
+    ScanOptions,
+    "repo" | "asOf" | "configPath" | "fromCommit" | "toCommit" | "limit"
+  > & {
     aiOverrides: AiOverrideConfig;
     asOf: string;
   },
@@ -502,21 +512,41 @@ export const scanRepository = (
     const root = yield* repoRoot(options.repo);
     const config = yield* loadSurvivalConfig(root, options.configPath);
     const head = yield* headSha(root);
-    const window = resolveScanWindow(
-      options.asOf,
-      options.survivalDays,
-      options.windowDays
-    );
-    const shas = yield* listCommitShas(root, {
-      since: window.changeWindowStart,
-      until: window.changeWindowEnd,
-      limit: options.limit
-    });
+    const rangeMode = options.toCommit !== null;
+    const asOf = rangeMode
+      ? parseAsOf(options.asOf).toISOString()
+      : resolveScanWindow(
+          options.asOf,
+          options.survivalDays,
+          options.windowDays
+        ).asOf;
+    const window = rangeMode
+      ? null
+      : resolveScanWindow(options.asOf, options.survivalDays, options.windowDays);
+    const sourceToSha = options.toCommit
+      ? yield* revParse(root, options.toCommit)
+      : null;
+    const sourceFromSha = options.fromCommit
+      ? yield* revParse(root, options.fromCommit)
+      : null;
+    const shas = rangeMode
+      ? yield* listCommitShasInRange(root, {
+          fromExclusive: sourceFromSha,
+          toInclusive: sourceToSha!,
+          limit: options.limit
+        })
+      : yield* listCommitShas(root, {
+          since: window!.changeWindowStart,
+          until: window!.changeWindowEnd,
+          limit: options.limit
+        });
     const changes: ScannedChange[] = [];
+    const commitDates: string[] = [];
     options.onProgress?.({ type: "start", repoRoot: root, total: shas.length });
 
     for (const [index, sha] of shas.entries()) {
       const commit = yield* readCommit(root, sha);
+      commitDates.push(commit.committedAt);
       options.onProgress?.({
         type: "commit",
         index: index + 1,
@@ -536,7 +566,7 @@ export const scanRepository = (
           blameTimeoutMs: options.blameTimeoutMs,
           copyDetection: options.copyDetection,
           aiOverrides: config.ai,
-          asOf: window.asOf,
+          asOf,
           onProgress: options.onProgress
         },
         { index: index + 1, total: shas.length }
@@ -555,6 +585,21 @@ export const scanRepository = (
         skipReason: change.skipReason
       });
     }
+    const sortedCommitDates = [...commitDates].sort();
+    const fallbackRangeDate =
+      sourceToSha === null
+        ? null
+        : (yield* readCommit(root, sourceToSha)).committedAt;
+    const changeWindowStart =
+      window?.changeWindowStart ??
+      sortedCommitDates[0] ??
+      fallbackRangeDate ??
+      asOf;
+    const changeWindowEnd =
+      window?.changeWindowEnd ??
+      sortedCommitDates.at(-1) ??
+      fallbackRangeDate ??
+      asOf;
 
     return {
       generatedAt: new Date().toISOString(),
@@ -562,9 +607,12 @@ export const scanRepository = (
       repoRoot: root,
       repoName: path.basename(root),
       headSha: head,
-      asOf: window.asOf,
-      changeWindowStart: window.changeWindowStart,
-      changeWindowEnd: window.changeWindowEnd,
+      asOf,
+      changeWindowStart,
+      changeWindowEnd,
+      sourceMode: rangeMode ? "range" : "window",
+      sourceFromSha,
+      sourceToSha,
       configPath: config.path,
       configuredAiGithubUsernames: config.ai.githubUsernames,
       configuredAiPrNumbers: config.ai.prNumbers,

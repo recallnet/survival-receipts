@@ -106,6 +106,8 @@ const program = Effect.gen(function* () {
     repo: config.repo,
     asOf: config.asOf,
     configPath: config.configPath,
+    fromCommit: config.fromCommit,
+    toCommit: config.toCommit,
     survivalDays: config.survivalDays,
     windowDays: config.windowDays,
     limit: config.limit,

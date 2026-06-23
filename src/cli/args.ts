@@ -3,6 +3,8 @@ export interface CliConfig {
   repo: string;
   asOf: string | null;
   configPath: string | null;
+  fromCommit: string | null;
+  toCommit: string | null;
   survivalDays: number[];
   windowDays: number;
   limit: number;
@@ -81,6 +83,8 @@ export const parseCliArgs = (argv: string[]): CliConfig => {
       repo: ".",
       asOf: null,
       configPath: null,
+      fromCommit: null,
+      toCommit: null,
       survivalDays: [30],
       windowDays: 30,
       limit: 250,
@@ -117,11 +121,20 @@ export const parseCliArgs = (argv: string[]): CliConfig => {
     throw new Error("--lookback was split into --survival-days and --window-days.");
   }
 
+  const fromCommit = readFlag(args, "--from-commit");
+  const toCommit = readFlag(args, "--to-commit");
+
+  if (fromCommit !== null && toCommit === null) {
+    throw new Error("--from-commit requires --to-commit.");
+  }
+
   return {
     command,
     repo: readFlag(args, "--repo") ?? ".",
     asOf: readFlag(args, "--as-of"),
     configPath: readFlag(args, "--config"),
+    fromCommit,
+    toCommit,
     survivalDays: parsePositiveIntegerList(
       readFlag(args, "--survival-days"),
       [30],
@@ -171,6 +184,8 @@ export const helpText = [
   "  --repo <path>       Git repo to scan. Defaults to the current directory.",
   "  --as-of <date>      Report cutoff. Defaults to the current time.",
   "  --config <path>     Config file. Defaults to survival.config.json in the repo root when present.",
+  "  --from-commit <sha> Scan commits after this commit. Requires --to-commit.",
+  "  --to-commit <sha>   Scan commits through this commit instead of using a date window.",
   "  --survival-days <days>",
   "                      Judge each change after these comma-separated checkpoints. Defaults to 30.",
   "  --window-days <days>",

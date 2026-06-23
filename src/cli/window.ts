@@ -6,7 +6,7 @@ export interface ScanWindow {
   changeWindowEnd: string;
 }
 
-const parseAsOf = (value: string | null) => {
+export const parseAsOf = (value: string | null) => {
   if (value === null || value.trim().length === 0 || value === "now") {
     return new Date();
   }

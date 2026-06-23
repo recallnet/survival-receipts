@@ -131,6 +131,22 @@ pnpm survival scan \
   --out reports/q1
 ```
 
+Use `--from-commit` and `--to-commit` when another system owns the cursor. The
+start commit is exclusive and the end commit is inclusive:
+
+```bash
+pnpm survival scan \
+  --repo /path/to/repo \
+  --from-commit abc123 \
+  --to-commit def456 \
+  --as-of 2026-06-01 \
+  --survival-days 1,7,15,30 \
+  --out reports/cursor-range
+```
+
+Range mode fails if the range has more commits than `--limit`. That is
+deliberate: a cursor run should process the full range or not advance.
+
 Use `survival.config.json` in the scanned repo when deterministic markers miss
 AI-authored work you already know about:
 
@@ -323,6 +339,42 @@ because a newly merged PR cannot have a 30 day survival score yet. A later
 version can record a pending receipt on merge, then score it once the survival
 period matures.
 
+For backend-connected scheduled runs, prefer cursor mode. The action asks the
+backend for the latest mature commit it has already processed, computes the
+newest commit old enough for the largest survival checkpoint, and scans exactly
+that commit range. If a daily run is missed, the next run catches up.
+
+```yaml
+name: Daily survival cursor
+
+on:
+  schedule:
+    - cron: "0 14 * * *"
+
+jobs:
+  survival:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: recallnet/survival-receipts@v0
+        with:
+          cursor-mode: "true"
+          survival-days: "1,7,15,30"
+          limit: "1000"
+          upload-url: https://app.example.com/api/runs
+          api-key: ${{ secrets.SURVIVAL_API_KEY }}
+```
+
+When `upload-url` ends with `/api/runs`, the action derives the cursor endpoint
+as `/api/cursor`. Pass `cursor-url` explicitly if your backend uses a different
+path.
+
 To connect the action to a hosted app, pass a backend upload URL and API key:
 
 ```yaml
@@ -330,13 +382,14 @@ To connect the action to a hosted app, pass a backend upload URL and API key:
   with:
     survival-days: "30"
     window-days: "7"
-    upload-url: https://app.example.com/api/survival-runs
+    upload-url: https://app.example.com/api/runs
     api-key: ${{ secrets.SURVIVAL_API_KEY }}
 ```
 
-The backend receives the JSON report. Source code stays in the GitHub Actions
-runner. If the runner is self-hosted, the scan never leaves the customer's
-infrastructure except for the derived JSON data they choose to upload.
+The backend receives an envelope containing GitHub run metadata and the JSON
+report. Source code stays in the GitHub Actions runner. If the runner is
+self-hosted, the scan never leaves the customer's infrastructure except for the
+derived JSON data they choose to upload.
 
 ## Important concepts
 

@@ -56,6 +56,9 @@ export const repoRoot = (repo: string) =>
 
 export const headSha = (repo: string) => git(repo, ["rev-parse", "HEAD"]);
 
+export const revParse = (repo: string, rev: string) =>
+  git(repo, ["rev-parse", rev]);
+
 export const listCommitShas = (
   repo: string,
   options: { since: string; until: string | null; limit: number }
@@ -70,6 +73,38 @@ export const listCommitShas = (
     ]),
     (stdout) => stdout.split("\n").filter(Boolean)
   );
+
+export const listCommitShasInRange = (
+  repo: string,
+  options: {
+    fromExclusive: string | null;
+    toInclusive: string;
+    limit: number;
+  }
+): Effect.Effect<string[], Error> =>
+  Effect.gen(function* () {
+    const range =
+      options.fromExclusive === null
+        ? options.toInclusive
+        : `${options.fromExclusive}..${options.toInclusive}`;
+    const stdout = yield* git(repo, [
+      "rev-list",
+      "--reverse",
+      `--max-count=${options.limit + 1}`,
+      range
+    ]);
+    const shas = stdout.split("\n").filter(Boolean);
+
+    if (shas.length > options.limit) {
+      return yield* Effect.fail(
+        new Error(
+          `Commit range contains more than --limit ${options.limit} commits. Increase --limit to process the full range.`
+        )
+      );
+    }
+
+    return shas;
+  });
 
 export const readCommit = (
   repo: string,

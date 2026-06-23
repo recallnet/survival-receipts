@@ -55,11 +55,19 @@ inputs:
     required: false
     default: survival-receipts
   upload-url:
-    description: Optional backend URL that receives the JSON report with HTTP POST.
+    description: Optional backend URL that receives the report envelope with HTTP POST.
+    required: false
+    default: ""
+  cursor-mode:
+    description: Use backend cursor state to scan all newly mature commits since the last processed commit.
+    required: false
+    default: "false"
+  cursor-url:
+    description: Optional backend cursor URL. Defaults to upload-url with /api/runs replaced by /api/cursor.
     required: false
     default: ""
   api-key:
-    description: Optional backend API key. Required when upload-url is set.
+    description: Optional backend API key. Required when upload-url or cursor-mode is set.
     required: false
     default: ""
 
@@ -76,6 +84,9 @@ outputs:
   artifact-url:
     description: URL for the uploaded report artifact when upload-artifact is true.
     value: ${{ steps.upload.outputs.artifact-url }}
+  skipped:
+    description: Whether the scan was skipped because no new mature commits were available.
+    value: ${{ steps.scan.outputs.skipped }}
 
 runs:
   using: composite
@@ -110,6 +121,8 @@ runs:
         INPUT_COPY_DETECTION: ${{ inputs.copy-detection }}
         INPUT_QUIET: ${{ inputs.quiet }}
         INPUT_UPLOAD_URL: ${{ inputs.upload-url }}
+        INPUT_CURSOR_MODE: ${{ inputs.cursor-mode }}
+        INPUT_CURSOR_URL: ${{ inputs.cursor-url }}
         INPUT_API_KEY: ${{ inputs.api-key }}
       run: |
         set -euo pipefail
@@ -117,6 +130,7 @@ runs:
         REPORT_DIR="$RUNNER_TEMP/survival-receipts"
         MARKDOWN_FILE="$REPORT_DIR/survival-report.md"
         JSON_FILE="$REPORT_DIR/survival-report.json"
+        UPLOAD_FILE="$REPORT_DIR/upload.json"
 
         rm -rf "$REPORT_DIR"
         mkdir -p "$REPORT_DIR"
@@ -124,6 +138,28 @@ runs:
         if [ "$(git -C "$GITHUB_WORKSPACE" rev-parse --is-shallow-repository)" = "true" ]; then
           echo "::notice::Repository checkout is shallow. Fetching full history for survival scoring."
           git -C "$GITHUB_WORKSPACE" fetch --prune --unshallow
+        fi
+
+        AS_OF="$INPUT_AS_OF"
+        if [ -z "$AS_OF" ]; then
+          AS_OF="$(node -e 'process.stdout.write(new Date().toISOString())')"
+        fi
+
+        CURSOR_URL="$INPUT_CURSOR_URL"
+        if [ "$INPUT_CURSOR_MODE" = "true" ]; then
+          if [ -z "$INPUT_UPLOAD_URL" ] || [ -z "$INPUT_API_KEY" ]; then
+            echo "::error::cursor-mode requires upload-url and api-key"
+            exit 1
+          fi
+
+          if [ -z "$CURSOR_URL" ]; then
+            if [[ "$INPUT_UPLOAD_URL" == */api/runs ]]; then
+              CURSOR_URL="${INPUT_UPLOAD_URL%/api/runs}/api/cursor"
+            else
+              echo "::error::cursor-mode requires cursor-url when upload-url does not end with /api/runs"
+              exit 1
+            fi
+          fi
         fi
 
         ARGS=(
@@ -140,8 +176,8 @@ runs:
           --json-out "$JSON_FILE"
         )
 
-        if [ -n "$INPUT_AS_OF" ]; then
-          ARGS+=(--as-of "$INPUT_AS_OF")
+        if [ -n "$AS_OF" ]; then
+          ARGS+=(--as-of "$AS_OF")
         fi
 
         if [ -n "$INPUT_CONFIG" ]; then
@@ -160,23 +196,89 @@ runs:
           ARGS+=(--quiet)
         fi
 
-        pnpm --dir "$GITHUB_ACTION_PATH" survival "${ARGS[@]}"
+        SKIPPED="false"
+
+        if [ "$INPUT_CURSOR_MODE" = "true" ]; then
+          MAX_SURVIVAL_DAYS="$(
+            node -e 'const days=process.argv[1].split(",").map((part)=>Number.parseInt(part.trim(),10)).filter(Number.isFinite); if (days.length === 0) process.exit(1); process.stdout.write(String(Math.max(...days)));' "$INPUT_SURVIVAL_DAYS"
+          )"
+          MATURE_CUTOFF="$(
+            node -e 'const date=new Date(process.argv[1]); date.setUTCDate(date.getUTCDate()-Number(process.argv[2])); process.stdout.write(date.toISOString());' "$AS_OF" "$MAX_SURVIVAL_DAYS"
+          )"
+          MATURE_HEAD="$(
+            git -C "$GITHUB_WORKSPACE" rev-list -n 1 --before="$MATURE_CUTOFF" HEAD || true
+          )"
+
+          if [ -z "$MATURE_HEAD" ]; then
+            SKIPPED="true"
+            {
+              echo "# Survival receipt report"
+              echo
+              echo "No mature commits were available before $MATURE_CUTOFF."
+            } > "$MARKDOWN_FILE"
+            printf '{"skipped":true,"reason":"no mature commits","matureCutoff":"%s"}\n' "$MATURE_CUTOFF" > "$JSON_FILE"
+          else
+            CURSOR_REQUEST="$REPORT_DIR/cursor-request.json"
+            CURSOR_RESPONSE="$REPORT_DIR/cursor-response.json"
+            node -e 'const fs=require("node:fs"); const [owner, repo]=(process.env.GITHUB_REPOSITORY || "/").split("/"); const repositoryId=process.env.GITHUB_REPOSITORY_ID ? Number(process.env.GITHUB_REPOSITORY_ID) : undefined; const body={github:{owner,repo,repository:process.env.GITHUB_REPOSITORY,repositoryId},survivalDays:process.env.INPUT_SURVIVAL_DAYS.split(",").map((part)=>Number.parseInt(part.trim(),10)).filter(Number.isFinite)}; fs.writeFileSync(process.argv[1], JSON.stringify(body));' "$CURSOR_REQUEST"
+            curl -fsS \
+              -X POST \
+              -H "authorization: Bearer $INPUT_API_KEY" \
+              -H "content-type: application/json" \
+              --data-binary @"$CURSOR_REQUEST" \
+              -o "$CURSOR_RESPONSE" \
+              "$CURSOR_URL"
+            LAST_PROCESSED_SHA="$(
+              node -e 'const fs=require("node:fs"); const data=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(data.latestProcessedSha || "");' "$CURSOR_RESPONSE"
+            )"
+
+            if [ -n "$LAST_PROCESSED_SHA" ]; then
+              if [ "$LAST_PROCESSED_SHA" = "$MATURE_HEAD" ]; then
+                SKIPPED="true"
+                {
+                  echo "# Survival receipt report"
+                  echo
+                  echo "No newly mature commits to scan."
+                  echo
+                  echo "- Latest processed commit: $LAST_PROCESSED_SHA"
+                  echo "- Mature head: $MATURE_HEAD"
+                } > "$MARKDOWN_FILE"
+                printf '{"skipped":true,"reason":"no newly mature commits","latestProcessedSha":"%s","matureHeadSha":"%s"}\n' "$LAST_PROCESSED_SHA" "$MATURE_HEAD" > "$JSON_FILE"
+              elif git -C "$GITHUB_WORKSPACE" merge-base --is-ancestor "$LAST_PROCESSED_SHA" "$MATURE_HEAD"; then
+                ARGS+=(--from-commit "$LAST_PROCESSED_SHA")
+              else
+                echo "::error::Backend cursor $LAST_PROCESSED_SHA is not an ancestor of mature head $MATURE_HEAD. Reset the backend cursor or check the workflow branch."
+                exit 1
+              fi
+            fi
+
+            if [ "$SKIPPED" != "true" ]; then
+              ARGS+=(--to-commit "$MATURE_HEAD")
+            fi
+          fi
+        fi
+
+        if [ "$SKIPPED" != "true" ]; then
+          pnpm --dir "$GITHUB_ACTION_PATH" survival "${ARGS[@]}"
+        fi
 
         if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
           cat "$MARKDOWN_FILE" >> "$GITHUB_STEP_SUMMARY"
         fi
 
-        if [ -n "$INPUT_UPLOAD_URL" ]; then
+        if [ -n "$INPUT_UPLOAD_URL" ] && [ "$SKIPPED" != "true" ]; then
           if [ -z "$INPUT_API_KEY" ]; then
             echo "::error::upload-url requires api-key"
             exit 1
           fi
 
+          node -e 'const fs=require("node:fs"); const report=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const [owner, repo]=(process.env.GITHUB_REPOSITORY || "/").split("/"); const repositoryId=process.env.GITHUB_REPOSITORY_ID ? Number(process.env.GITHUB_REPOSITORY_ID) : undefined; const body={schemaVersion:"survival.run.v1",source:"github_action",github:{owner,repo,repository:process.env.GITHUB_REPOSITORY,repositoryId,workflowRunId:process.env.GITHUB_RUN_ID,workflowSha:process.env.GITHUB_SHA,actor:process.env.GITHUB_ACTOR},report}; fs.writeFileSync(process.argv[2], JSON.stringify(body));' "$JSON_FILE" "$UPLOAD_FILE"
+
           curl -fsS \
             -X POST \
             -H "authorization: Bearer $INPUT_API_KEY" \
             -H "content-type: application/json" \
-            --data-binary @"$JSON_FILE" \
+            --data-binary @"$UPLOAD_FILE" \
             "$INPUT_UPLOAD_URL"
         fi
 
@@ -184,6 +286,7 @@ runs:
           echo "markdown-path=$MARKDOWN_FILE"
           echo "json-path=$JSON_FILE"
           echo "report-dir=$REPORT_DIR"
+          echo "skipped=$SKIPPED"
         } >> "$GITHUB_OUTPUT"
 
     - name: Upload survival reports

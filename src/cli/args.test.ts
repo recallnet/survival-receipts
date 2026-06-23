@@ -13,6 +13,10 @@ describe("CLI args", () => {
       "45,7,45",
       "--window-days",
       "7",
+      "--from-commit",
+      "abc123",
+      "--to-commit",
+      "def456",
       "--out",
       "reports/survival-report.md",
       "--json-out",
@@ -23,6 +27,14 @@ describe("CLI args", () => {
     expect(config.jsonOut).toBe("reports/survival-report.json");
     expect(config.survivalDays).toEqual([7, 45]);
     expect(config.windowDays).toBe(7);
+    expect(config.fromCommit).toBe("abc123");
+    expect(config.toCommit).toBe("def456");
+  });
+
+  it("requires a range end when a range start is provided", () => {
+    expect(() =>
+      parseCliArgs(["node", "main.ts", "scan", "--from-commit", "abc123"])
+    ).toThrow("--from-commit requires --to-commit");
   });
 
   it("rejects removed window flags", () => {
