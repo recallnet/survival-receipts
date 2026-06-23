@@ -1,10 +1,11 @@
 import { aiMarkerLabels } from "./markers";
-import type { ScanResult, ScannedChange } from "./scanner";
+import type { ScanResult, ScannedChange, SurvivalCheckpoint } from "./scanner";
 
 interface ChangeGroupSummary {
   kind: "ai" | "human";
   changes: ScannedChange[];
   scored: ScannedChange[];
+  survivalDays: number;
   addedLines: number;
   survivingLines: number;
   survivalRatio: number | null;
@@ -22,6 +23,12 @@ interface BucketComparison {
   bucket: SizeBucket;
   ai: BucketGroupSummary;
   human: BucketGroupSummary;
+}
+
+interface CheckpointComparison {
+  survivalDays: number;
+  ai: ChangeGroupSummary;
+  human: ChangeGroupSummary;
 }
 
 interface SizeBucket {
@@ -71,19 +78,44 @@ const markerText = (change: ScannedChange) =>
     ? change.ai.matches.map((match) => match.label).join(", ")
     : "none";
 
+const headlineSurvivalDays = (result: ScanResult) =>
+  result.survivalDays.at(-1) ?? 30;
+
+const checkpointFor = (
+  change: ScannedChange,
+  survivalDays: number
+): SurvivalCheckpoint | undefined =>
+  change.checkpoints.find((checkpoint) => checkpoint.survivalDays === survivalDays);
+
+const scoredCheckpointFor = (
+  change: ScannedChange,
+  survivalDays: number
+): SurvivalCheckpoint | null => {
+  const checkpoint = checkpointFor(change, survivalDays);
+
+  return checkpoint?.status === "scored" ? checkpoint : null;
+};
+
 const summarize = (
   result: ScanResult,
-  kind: "ai" | "human"
+  kind: "ai" | "human",
+  survivalDays: number
 ): ChangeGroupSummary => {
   const changes = result.changes.filter((change) => change.kind === kind);
-  const scored = changes.filter((change) => change.status === "scored");
+  const scored = changes.filter(
+    (change) => scoredCheckpointFor(change, survivalDays) !== null
+  );
   const addedLines = sum(scored, (change) => change.addedLines);
-  const survivingLines = sum(scored, (change) => change.survivingLines);
+  const survivingLines = sum(
+    scored,
+    (change) => scoredCheckpointFor(change, survivalDays)?.survivingLines ?? 0
+  );
 
   return {
     kind,
     changes,
     scored,
+    survivalDays,
     addedLines,
     survivingLines,
     survivalRatio: addedLines > 0 ? survivingLines / addedLines : null,
@@ -101,13 +133,17 @@ const bucketFor = (change: ScannedChange) =>
 const summarizeBucket = (
   changes: ScannedChange[],
   kind: "ai" | "human",
-  bucket: SizeBucket
+  bucket: SizeBucket,
+  survivalDays: number
 ): BucketGroupSummary => {
   const bucketChanges = changes.filter(
     (change) => change.kind === kind && bucketFor(change)?.id === bucket.id
   );
   const addedLines = sum(bucketChanges, (change) => change.addedLines);
-  const survivingLines = sum(bucketChanges, (change) => change.survivingLines);
+  const survivingLines = sum(
+    bucketChanges,
+    (change) => scoredCheckpointFor(change, survivalDays)?.survivingLines ?? 0
+  );
 
   return {
     changes: bucketChanges.length,
@@ -117,14 +153,46 @@ const summarizeBucket = (
   };
 };
 
-const compareSizeBuckets = (result: ScanResult): BucketComparison[] => {
-  const scored = result.changes.filter((change) => change.status === "scored");
+const compareSizeBuckets = (
+  result: ScanResult,
+  survivalDays: number
+): BucketComparison[] => {
+  const scored = result.changes.filter(
+    (change) => scoredCheckpointFor(change, survivalDays) !== null
+  );
 
   return sizeBuckets.map((bucket) => ({
     bucket,
-    ai: summarizeBucket(scored, "ai", bucket),
-    human: summarizeBucket(scored, "human", bucket)
+    ai: summarizeBucket(scored, "ai", bucket, survivalDays),
+    human: summarizeBucket(scored, "human", bucket, survivalDays)
   }));
+};
+
+const compareCheckpoints = (result: ScanResult): CheckpointComparison[] =>
+  result.survivalDays.map((survivalDays) => ({
+    survivalDays,
+    ai: summarize(result, "ai", survivalDays),
+    human: summarize(result, "human", survivalDays)
+  }));
+
+const renderCheckpointTable = (comparisons: CheckpointComparison[]) => {
+  const rows = comparisons.map(({ survivalDays, ai, human }) => [
+    `${survivalDays}`,
+    String(ai.scored.length),
+    String(ai.survivingLines),
+    pct(ai.survivalRatio),
+    String(human.scored.length),
+    String(human.survivingLines),
+    pct(human.survivalRatio),
+    pointDelta(ai.survivalRatio, human.survivalRatio)
+  ]);
+
+  return [
+    "| Survival days | AI scored | AI survived | AI survival | Human scored | Human survived | Human survival | AI minus human |",
+    "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ...rows.map((row) => `| ${row.join(" | ")} |`),
+    ""
+  ].join("\n");
 };
 
 const renderSizeBucketTable = (comparisons: BucketComparison[]) => {
@@ -151,22 +219,26 @@ const renderSizeBucketTable = (comparisons: BucketComparison[]) => {
   ].join("\n");
 };
 
-const renderChangeTable = (changes: ScannedChange[]) => {
+const renderChangeTable = (changes: ScannedChange[], survivalDays: number) => {
   if (changes.length === 0) {
     return "No changes in this section.\n";
   }
 
-  const rows = changes.map((change) => [
-    changeUrlLabel(change),
-    change.commit.shortSha,
-    new Date(change.commit.committedAt).toISOString().slice(0, 10),
-    escapeCell(change.commit.authorName),
-    String(change.addedLines),
-    String(change.survivingLines),
-    pct(change.survivalRatio),
-    change.kind === "ai" ? money(change.estimatedAiCostUsd) : "",
-    escapeCell(change.commit.subject)
-  ]);
+  const rows = changes.map((change) => {
+    const checkpoint = scoredCheckpointFor(change, survivalDays);
+
+    return [
+      changeUrlLabel(change),
+      change.commit.shortSha,
+      new Date(change.commit.committedAt).toISOString().slice(0, 10),
+      escapeCell(change.commit.authorName),
+      String(change.addedLines),
+      String(checkpoint?.survivingLines ?? 0),
+      pct(checkpoint?.survivalRatio ?? null),
+      change.kind === "ai" ? money(change.estimatedAiCostUsd) : "",
+      escapeCell(change.commit.subject)
+    ];
+  });
 
   return [
     "| Change | Commit | Date | Author | Added | Survived | Survival | Est. AI cost | Subject |",
@@ -256,16 +328,28 @@ const renderVerdict = (
 };
 
 export const renderMarkdownReport = (result: ScanResult) => {
-  const ai = summarize(result, "ai");
-  const human = summarize(result, "human");
-  const bucketComparisons = compareSizeBuckets(result);
-  const scored = result.changes.filter((change) => change.status === "scored");
+  const headlineDays = headlineSurvivalDays(result);
+  const ai = summarize(result, "ai", headlineDays);
+  const human = summarize(result, "human", headlineDays);
+  const bucketComparisons = compareSizeBuckets(result, headlineDays);
+  const checkpointComparisons = compareCheckpoints(result);
+  const scored = result.changes.filter(
+    (change) => scoredCheckpointFor(change, headlineDays) !== null
+  );
   const scoredAi = ai.scored;
   const durableAi = [...scoredAi]
-    .sort((a, b) => (b.survivalRatio ?? 0) - (a.survivalRatio ?? 0))
+    .sort(
+      (a, b) =>
+        (scoredCheckpointFor(b, headlineDays)?.survivalRatio ?? 0) -
+        (scoredCheckpointFor(a, headlineDays)?.survivalRatio ?? 0)
+    )
     .slice(0, 8);
   const weakAi = [...scoredAi]
-    .sort((a, b) => (a.survivalRatio ?? 0) - (b.survivalRatio ?? 0))
+    .sort(
+      (a, b) =>
+        (scoredCheckpointFor(a, headlineDays)?.survivalRatio ?? 0) -
+        (scoredCheckpointFor(b, headlineDays)?.survivalRatio ?? 0)
+    )
     .slice(0, 8);
   const costPerSurvivingAiLine =
     ai.survivingLines > 0 ? ai.estimatedCostUsd / ai.survivingLines : null;
@@ -284,7 +368,8 @@ export const renderMarkdownReport = (result: ScanResult) => {
     `- Repo: ${result.repoRoot}`,
     `- HEAD: ${result.headSha.slice(0, 12)}`,
     `- As of: ${result.asOf}`,
-    `- Survival days: ${result.survivalDays}`,
+    `- Survival days: ${result.survivalDays.join(", ")}`,
+    `- Headline survival days: ${headlineDays}`,
     `- Window days: ${result.windowDays}`,
     `- Mature change window: ${result.changeWindowStart} to ${result.changeWindowEnd}`,
     `- Config: ${result.configPath ?? "none"}`,
@@ -308,15 +393,18 @@ export const renderMarkdownReport = (result: ScanResult) => {
     } |`,
     `| Human | ${human.changes.length} | ${human.scored.length} | ${human.addedLines} | ${human.survivingLines} | ${pct(human.survivalRatio)} |  |  |`,
     "",
+    "## Survival by checkpoint",
+    "",
+    renderCheckpointTable(checkpointComparisons),
     "## Survival by change size",
     "",
     renderSizeBucketTable(bucketComparisons),
     "## Most durable AI changes",
     "",
-    renderChangeTable(durableAi),
+    renderChangeTable(durableAi, headlineDays),
     "## Weakest AI changes",
     "",
-    renderChangeTable(weakAi),
+    renderChangeTable(weakAi, headlineDays),
     "## Deterministic AI markers",
     "",
     ...aiMarkerLabels.map((label) => `- ${label}`),
@@ -343,11 +431,13 @@ export const renderMarkdownReport = (result: ScanResult) => {
     [
       "This report uses local git facts only.",
       "A scored change must be a single-parent commit with at least one included added line.",
-      `For each scored change, the scanner finds the commit at the ${result.survivalDays} day survival date and runs git blame with move detection${
+      `For each scored change, the scanner finds the commit at each requested survival date (${result.survivalDays.join(
+        ", "
+      )} days) and runs git blame with move detection${
         result.copyDetection ? " and copy detection" : ""
       }.`,
       "A line survives when the survival-date blame still attributes it to the source commit.",
-      "The mature change window ends survival-days before the report cutoff, so every scored change has had a full survival period.",
+      "The mature change window ends at the largest survival-days checkpoint before the report cutoff, so every headline change has had the full survival period.",
       "Size buckets compare AI and human changes with similar added-line counts: tiny is 1-20 lines, small is 21-100, medium is 101-500, and large is 501 or more.",
       "Generated files, lockfiles, build output, vendored code, sourcemaps, snapshots, binary assets, and media files are excluded.",
       "Merge commits are skipped for now because proper support needs branch reconstruction.",

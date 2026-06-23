@@ -149,7 +149,7 @@ describe("CLI scanner", () => {
           repo,
           asOf: "2026-02-03T12:00:00Z",
           configPath: null,
-          survivalDays: 30,
+          survivalDays: [30],
           windowDays: 30,
           limit: 25,
           maxFilesPerChange: 40,
@@ -171,12 +171,12 @@ describe("CLI scanner", () => {
       expect(aiChange?.status).toBe("scored");
       expect(aiChange?.prNumber).toBe(12);
       expect(aiChange?.addedLines).toBe(2);
-      expect(aiChange?.survivingLines).toBe(1);
-      expect(aiChange?.survivalRatio).toBe(0.5);
+      expect(aiChange?.checkpoints[0]?.survivingLines).toBe(1);
+      expect(aiChange?.checkpoints[0]?.survivalRatio).toBe(0.5);
 
       expect(humanChange?.kind).toBe("human");
       expect(humanChange?.status).toBe("scored");
-      expect(humanChange?.survivalRatio).toBe(1);
+      expect(humanChange?.checkpoints[0]?.survivalRatio).toBe(1);
       expect(report).toContain("AI added lines died");
       expect(report).toContain("ship agent helper");
     } finally {
@@ -206,7 +206,7 @@ describe("CLI scanner", () => {
           repo,
           asOf: "2026-02-03T12:00:00Z",
           configPath: null,
-          survivalDays: 30,
+          survivalDays: [30],
           windowDays: 30,
           limit: 25,
           maxFilesPerChange: 40,
@@ -252,7 +252,7 @@ describe("CLI scanner", () => {
           repo,
           asOf: "2026-01-04T12:00:00Z",
           configPath: null,
-          survivalDays: 1,
+          survivalDays: [1],
           windowDays: 1,
           limit: 25,
           maxFilesPerChange: 40,
@@ -270,6 +270,61 @@ describe("CLI scanner", () => {
       expect(result.configuredAiPrNumbers).toEqual([44]);
       expect(configuredChange?.kind).toBe("ai");
       expect(configuredChange?.ai.confidence).toBe(1);
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("scores one change at multiple survival checkpoints", async () => {
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "survival-curve-"));
+
+    try {
+      await execFileAsync("git", ["init", repo]);
+      await git(repo, ["config", "user.name", "Test User"]);
+      await git(repo, ["config", "user.email", "test@example.com"]);
+
+      await fs.writeFile(path.join(repo, "app.ts"), "base\n");
+      await commitAll(repo, ["initial"], "2026-01-01T12:00:00Z");
+
+      await fs.writeFile(path.join(repo, "app.ts"), "base\nkept\nremoved\n");
+      await commitAll(
+        repo,
+        [
+          "agent change (#88)",
+          "Co-authored-by: Claude <noreply@anthropic.com>"
+        ],
+        "2026-01-02T12:00:00Z"
+      );
+
+      await fs.writeFile(path.join(repo, "app.ts"), "base\nkept\n");
+      await commitAll(repo, ["remove one line"], "2026-01-06T12:00:00Z");
+
+      const result = await Effect.runPromise(
+        scanRepository({
+          repo,
+          asOf: "2026-02-01T12:00:00Z",
+          configPath: null,
+          survivalDays: [1, 7],
+          windowDays: 30,
+          limit: 25,
+          maxFilesPerChange: 40,
+          maxAddedLinesPerChange: 2500,
+          maxFileAddedLines: 750,
+          blameTimeoutMs: 30000,
+          copyDetection: false
+        })
+      );
+      const aiChange = result.changes.find(
+        (change) => change.commit.subject === "agent change (#88)"
+      );
+
+      expect(result.survivalDays).toEqual([1, 7]);
+      expect(aiChange?.checkpoints.map((checkpoint) => checkpoint.survivalDays)).toEqual([
+        1,
+        7
+      ]);
+      expect(aiChange?.checkpoints[0]?.survivingLines).toBe(2);
+      expect(aiChange?.checkpoints[1]?.survivingLines).toBe(1);
     } finally {
       await fs.rm(repo, { recursive: true, force: true });
     }

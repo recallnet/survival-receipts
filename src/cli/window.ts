@@ -24,12 +24,13 @@ const parseAsOf = (value: string | null) => {
 
 export const resolveScanWindow = (
   asOfInput: string | null,
-  survivalDays: number,
+  survivalDays: number[],
   windowDays: number
 ): ScanWindow => {
   const asOf = parseAsOf(asOfInput);
+  const maxSurvivalDays = Math.max(...survivalDays);
   const changeWindowEnd = new Date(
-    asOf.getTime() - daysToMs(survivalDays)
+    asOf.getTime() - daysToMs(maxSurvivalDays)
   );
   const changeWindowStart = new Date(
     changeWindowEnd.getTime() - daysToMs(windowDays)

@@ -3,7 +3,7 @@ export interface CliConfig {
   repo: string;
   asOf: string | null;
   configPath: string | null;
-  survivalDays: number;
+  survivalDays: number[];
   windowDays: number;
   limit: number;
   maxFilesPerChange: number;
@@ -46,6 +46,31 @@ const parsePositiveInteger = (
   return parsed;
 };
 
+const parsePositiveIntegerList = (
+  value: string | null,
+  fallback: number[],
+  label: string
+) => {
+  if (value === null) {
+    return fallback;
+  }
+
+  const parsed = value
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .map((part) => Number.parseInt(part, 10));
+
+  if (
+    parsed.length === 0 ||
+    parsed.some((number) => !Number.isFinite(number) || number <= 0)
+  ) {
+    throw new Error(`${label} must be a comma-separated list of positive integers`);
+  }
+
+  return [...new Set(parsed)].sort((a, b) => a - b);
+};
+
 export const parseCliArgs = (argv: string[]): CliConfig => {
   const args = argv.slice(2);
   const command = args[0] && !args[0].startsWith("--") ? args[0] : "scan";
@@ -56,7 +81,7 @@ export const parseCliArgs = (argv: string[]): CliConfig => {
       repo: ".",
       asOf: null,
       configPath: null,
-      survivalDays: 30,
+      survivalDays: [30],
       windowDays: 30,
       limit: 250,
       maxFilesPerChange: 25,
@@ -97,9 +122,9 @@ export const parseCliArgs = (argv: string[]): CliConfig => {
     repo: readFlag(args, "--repo") ?? ".",
     asOf: readFlag(args, "--as-of"),
     configPath: readFlag(args, "--config"),
-    survivalDays: parsePositiveInteger(
+    survivalDays: parsePositiveIntegerList(
       readFlag(args, "--survival-days"),
-      30,
+      [30],
       "--survival-days"
     ),
     windowDays: parsePositiveInteger(
@@ -139,7 +164,7 @@ export const helpText = [
   "Survival Receipts CLI",
   "",
   "Usage:",
-  "  pnpm survival scan --repo . --survival-days 30 --window-days 30 --out reports/demo",
+  "  pnpm survival scan --repo . --survival-days 1,7,15,30 --window-days 7 --out reports/demo",
   "  pnpm survival inspect --repo . --as-of 2026-06-01 --survival-days 30 --window-days 7",
   "",
   "Options:",
@@ -147,7 +172,7 @@ export const helpText = [
   "  --as-of <date>      Report cutoff. Defaults to the current time.",
   "  --config <path>     Config file. Defaults to survival.config.json in the repo root when present.",
   "  --survival-days <days>",
-  "                      Judge each change after this many days. Defaults to 30.",
+  "                      Judge each change after these comma-separated checkpoints. Defaults to 30.",
   "  --window-days <days>",
   "                      Include this many days of mature changes. Defaults to 30.",
   "  --limit <count>     Max commits to inspect. Defaults to 250.",

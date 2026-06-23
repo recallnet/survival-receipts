@@ -60,6 +60,17 @@ report from git history:
 pnpm survival scan --repo /path/to/repo --survival-days 30 --window-days 30 --out reports/my-repo
 ```
 
+Use one value for the familiar matured report. Use a comma-separated list for a
+survival curve:
+
+```bash
+pnpm survival scan \
+  --repo /path/to/repo \
+  --survival-days 1,7,15,30 \
+  --window-days 7 \
+  --out reports/my-repo
+```
+
 Add `--json-out` when another tool needs the raw scan result:
 
 ```bash
@@ -99,11 +110,15 @@ run blame or score survival.
 
 `--as-of` is the report cutoff and defaults to the current time.
 `--survival-days` says how old a change must be before the scanner judges it.
+It accepts one checkpoint, such as `30`, or a list, such as `1,7,15,30`.
 `--window-days` says how many days of mature source changes to include.
 
 With `--as-of 2026-06-01 --survival-days 30 --window-days 7`, the scanner looks
 at changes from 2026-04-25 through 2026-05-02. Those are the latest 7 days of
 changes that had a full 30 days to survive by 2026-06-01.
+
+With `--as-of 2026-06-01 --survival-days 1,7,15,30 --window-days 7`, it uses
+the same source window and scores each change at 1, 7, 15, and 30 days.
 
 Use `--as-of` when you want to backtest as of a past date:
 
@@ -300,11 +315,13 @@ jobs:
 ```
 
 With `survival-days: "30"` and `window-days: "7"`, each weekly run scores the
-latest 7 days of changes that had 30 days to survive. That keeps newly merged
-code out of the report until it is mature enough to judge. A PR-time action is
-less useful for this metric because a newly merged PR cannot have a 30 day
-survival score yet. A later version can record a pending receipt on merge, then
-score it once the survival period matures.
+latest 7 days of changes that had 30 days to survive. With
+`survival-days: "1,7,15,30"`, the same run also shows the earlier survival
+curve for that cohort. That keeps newly merged code out of the report until it
+is mature enough to judge. A PR-time action is less useful for this metric
+because a newly merged PR cannot have a 30 day survival score yet. A later
+version can record a pending receipt on merge, then score it once the survival
+period matures.
 
 To connect the action to a hosted app, pass a backend upload URL and API key:
 

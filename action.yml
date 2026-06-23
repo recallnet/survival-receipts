@@ -7,7 +7,7 @@ inputs:
     required: false
     default: ""
   survival-days:
-    description: Judge each change after this many days.
+    description: Comma-separated survival checkpoints, such as 30 or 1,7,15,30.
     required: true
     default: "30"
   window-days:

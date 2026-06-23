@@ -10,7 +10,7 @@ describe("CLI args", () => {
       "--repo",
       ".",
       "--survival-days",
-      "45",
+      "45,7,45",
       "--window-days",
       "7",
       "--out",
@@ -21,7 +21,7 @@ describe("CLI args", () => {
 
     expect(config.out).toBe("reports/survival-report.md");
     expect(config.jsonOut).toBe("reports/survival-report.json");
-    expect(config.survivalDays).toBe(45);
+    expect(config.survivalDays).toEqual([7, 45]);
     expect(config.windowDays).toBe(7);
   });
 

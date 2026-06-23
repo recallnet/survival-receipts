@@ -104,7 +104,7 @@ describe("CLI inspect command", () => {
           asOf: "2026-02-02T12:00:00.000Z",
           changeWindowStart: "2025-12-04T12:00:00.000Z",
           changeWindowEnd: "2026-01-03T12:00:00.000Z",
-          survivalDays: 30,
+          survivalDays: [30],
           windowDays: 30,
           limit: 25
         })

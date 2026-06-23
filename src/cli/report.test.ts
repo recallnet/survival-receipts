@@ -37,11 +37,18 @@ const makeChange = (input: {
   deletedLines: 0,
   changedLines: input.addedLines,
   estimatedAiCostUsd: input.kind === "ai" ? 1 : 0,
-  survivalDate: "2026-02-01T12:00:00Z",
-  targetSha: "target",
-  survivingLines: input.survivingLines,
-  survivalRatio: input.survivingLines / input.addedLines,
-  fileSurvival: [],
+  checkpoints: [
+    {
+      survivalDays: 30,
+      survivalDate: "2026-02-01T12:00:00Z",
+      targetSha: "target",
+      survivingLines: input.survivingLines,
+      survivalRatio: input.survivingLines / input.addedLines,
+      fileSurvival: [],
+      status: "scored",
+      skipReason: null
+    }
+  ],
   status: "scored",
   skipReason: null
 });
@@ -58,7 +65,7 @@ const makeResult = (changes: ScannedChange[]): ScanResult => ({
   configPath: null,
   configuredAiGithubUsernames: [],
   configuredAiPrNumbers: [],
-  survivalDays: 30,
+  survivalDays: [30],
   windowDays: 31,
   limit: 250,
   maxFilesPerChange: 25,
@@ -102,6 +109,7 @@ describe("survival report", () => {
     );
 
     expect(report).toContain("## Survival by change size");
+    expect(report).toContain("## Survival by checkpoint");
     expect(report).toContain(
       "| Tiny, 1-20 lines | 1 | 10 | 8 | 80% | 1 | 10 | 5 | 50% | +30 pts |"
     );

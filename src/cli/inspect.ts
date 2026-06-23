@@ -15,7 +15,7 @@ export interface InspectOptions {
   asOf: string;
   changeWindowStart: string;
   changeWindowEnd: string;
-  survivalDays: number;
+  survivalDays: number[];
   windowDays: number;
   limit: number;
 }
@@ -45,7 +45,7 @@ export interface InspectResult {
   asOf: string;
   changeWindowStart: string;
   changeWindowEnd: string;
-  survivalDays: number;
+  survivalDays: number[];
   windowDays: number;
   limit: number;
   commitsSeen: number;

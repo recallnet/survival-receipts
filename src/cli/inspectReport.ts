@@ -58,7 +58,7 @@ export const renderInspectReport = (result: InspectResult) =>
     `- Repo: ${result.repoRoot}`,
     `- HEAD: ${result.headSha.slice(0, 12)}`,
     `- As of: ${result.asOf}`,
-    `- Survival days: ${result.survivalDays}`,
+    `- Survival days: ${result.survivalDays.join(", ")}`,
     `- Window days: ${result.windowDays}`,
     `- Mature change window: ${result.changeWindowStart} to ${result.changeWindowEnd}`,
     `- Commit limit: ${result.limit}`,

@@ -20,7 +20,7 @@ export interface ScanOptions {
   repo: string;
   asOf: string | null;
   configPath: string | null;
-  survivalDays: number;
+  survivalDays: number[];
   windowDays: number;
   limit: number;
   maxFilesPerChange: number;
@@ -78,6 +78,13 @@ export interface ScannedChange {
   deletedLines: number;
   changedLines: number;
   estimatedAiCostUsd: number;
+  checkpoints: SurvivalCheckpoint[];
+  status: "scored" | "skipped";
+  skipReason: string | null;
+}
+
+export interface SurvivalCheckpoint {
+  survivalDays: number;
   survivalDate: string | null;
   targetSha: string | null;
   survivingLines: number;
@@ -99,7 +106,7 @@ export interface ScanResult {
   configPath: string | null;
   configuredAiGithubUsernames: string[];
   configuredAiPrNumbers: number[];
-  survivalDays: number;
+  survivalDays: number[];
   windowDays: number;
   limit: number;
   maxFilesPerChange: number;
@@ -222,6 +229,102 @@ const scoreFile = (
     };
   });
 
+const scoreCheckpoint = (
+  repo: string,
+  commit: GitCommit,
+  includedFiles: FileChange[],
+  addedLines: number,
+  survivalDays: number,
+  asOf: string,
+  blameTimeoutMs: number,
+  copyDetection: boolean,
+  onProgress: ScanOptions["onProgress"]
+): Effect.Effect<SurvivalCheckpoint, Error> =>
+  Effect.gen(function* () {
+    const survivalDate = addDays(new Date(commit.committedAt), survivalDays);
+    const asOfDate = new Date(asOf);
+
+    if (survivalDate.getTime() > asOfDate.getTime()) {
+      return {
+        survivalDays,
+        survivalDate: survivalDate.toISOString(),
+        targetSha: null,
+        survivingLines: 0,
+        survivalRatio: null,
+        fileSurvival: [],
+        status: "skipped",
+        skipReason: `commit has not reached ${survivalDays} day survival age`
+      };
+    }
+
+    const targetSha = yield* commitBefore(repo, survivalDate.toISOString());
+
+    if (!targetSha) {
+      return {
+        survivalDays,
+        survivalDate: survivalDate.toISOString(),
+        targetSha: null,
+        survivingLines: 0,
+        survivalRatio: null,
+        fileSurvival: [],
+        status: "skipped",
+        skipReason: "no commit exists at the survival date"
+      };
+    }
+
+    const fileSurvival: FileSurvival[] = [];
+
+    for (const [fileIndex, file] of includedFiles.entries()) {
+      onProgress?.({
+        type: "blame-file",
+        commitShortSha: commit.shortSha,
+        fileIndex: fileIndex + 1,
+        fileTotal: includedFiles.length,
+        path: file.path,
+        addedLines: file.added
+      });
+
+      const scoredFile = yield* Effect.either(
+        scoreFile(
+          repo,
+          commit.sha,
+          targetSha,
+          file,
+          blameTimeoutMs,
+          copyDetection
+        )
+      );
+
+      if (Either.isLeft(scoredFile)) {
+        return {
+          survivalDays,
+          survivalDate: survivalDate.toISOString(),
+          targetSha,
+          survivingLines: 0,
+          survivalRatio: null,
+          fileSurvival: [],
+          status: "skipped",
+          skipReason: `git blame failed for ${file.path}: ${scoredFile.left.message}`
+        };
+      }
+
+      fileSurvival.push(scoredFile.right);
+    }
+
+    const survivingLines = sum(fileSurvival, (file) => file.survivingLines);
+
+    return {
+      survivalDays,
+      survivalDate: survivalDate.toISOString(),
+      targetSha,
+      survivingLines,
+      survivalRatio: round(survivingLines / addedLines, 4),
+      fileSurvival,
+      status: "scored",
+      skipReason: null
+    };
+  });
+
 const scanCommit = (
   repo: string,
   commit: GitCommit,
@@ -257,8 +360,6 @@ const scanCommit = (
       deletedLines?: number;
       changedLines?: number;
       estimatedAiCostUsd?: number;
-      survivalDate?: string | null;
-      targetSha?: string | null;
       skipReason: string;
     }): ScannedChange => ({
       ...base,
@@ -269,11 +370,16 @@ const scanCommit = (
       deletedLines: input.deletedLines ?? 0,
       changedLines: input.changedLines ?? 0,
       estimatedAiCostUsd: input.estimatedAiCostUsd ?? 0,
-      survivalDate: input.survivalDate ?? null,
-      targetSha: input.targetSha ?? null,
-      survivingLines: 0,
-      survivalRatio: null,
-      fileSurvival: [],
+      checkpoints: options.survivalDays.map((days) => ({
+        survivalDays: days,
+        survivalDate: addDays(new Date(commit.committedAt), days).toISOString(),
+        targetSha: null,
+        survivingLines: 0,
+        survivalRatio: null,
+        fileSurvival: [],
+        status: "skipped",
+        skipReason: input.skipReason
+      })),
       status: "skipped",
       skipReason: input.skipReason
     });
@@ -347,64 +453,28 @@ const scanCommit = (
       });
     }
 
-    const survivalDate = addDays(new Date(commit.committedAt), options.survivalDays);
-    const asOf = new Date(options.asOf);
+    const checkpoints: SurvivalCheckpoint[] = [];
 
-    if (survivalDate.getTime() > asOf.getTime()) {
-      return skipped({
-        ...skipShared,
-        survivalDate: survivalDate.toISOString(),
-        skipReason: `commit has not reached ${options.survivalDays} day survival age`
-      });
-    }
-
-    const targetSha = yield* commitBefore(repo, survivalDate.toISOString());
-
-    if (!targetSha) {
-      return skipped({
-        ...skipShared,
-        survivalDate: survivalDate.toISOString(),
-        skipReason: "no commit exists at the survival date"
-      });
-    }
-
-    const fileSurvival: FileSurvival[] = [];
-
-    for (const [fileIndex, file] of includedFiles.entries()) {
-      options.onProgress?.({
-        type: "blame-file",
-        commitShortSha: commit.shortSha,
-        fileIndex: fileIndex + 1,
-        fileTotal: includedFiles.length,
-        path: file.path,
-        addedLines: file.added
-      });
-
-      const scoredFile = yield* Effect.either(
-        scoreFile(
+    for (const days of options.survivalDays) {
+      checkpoints.push(
+        yield* scoreCheckpoint(
           repo,
-          commit.sha,
-          targetSha,
-          file,
+          commit,
+          includedFiles,
+          addedLines,
+          days,
+          options.asOf,
           options.blameTimeoutMs,
-          options.copyDetection
+          options.copyDetection,
+          options.onProgress
         )
       );
-
-      if (Either.isLeft(scoredFile)) {
-        return skipped({
-          ...skipShared,
-          survivalDate: survivalDate.toISOString(),
-          targetSha,
-          skipReason: `git blame failed for ${file.path}: ${scoredFile.left.message}`
-        });
-      }
-
-      fileSurvival.push(scoredFile.right);
     }
 
-    const survivingLines = sum(fileSurvival, (file) => file.survivingLines);
-    const survivalRatio = addedLines > 0 ? survivingLines / addedLines : 0;
+    const scoredCheckpoints = checkpoints.filter(
+      (checkpoint) => checkpoint.status === "scored"
+    );
+    const status = scoredCheckpoints.length > 0 ? "scored" : "skipped";
 
     return {
       ...base,
@@ -415,13 +485,13 @@ const scanCommit = (
       deletedLines,
       changedLines,
       estimatedAiCostUsd,
-      survivalDate: survivalDate.toISOString(),
-      targetSha,
-      survivingLines,
-      survivalRatio: round(survivalRatio, 4),
-      fileSurvival,
-      status: "scored",
-      skipReason: null
+      checkpoints,
+      status,
+      skipReason:
+        status === "skipped"
+          ? checkpoints.find((checkpoint) => checkpoint.skipReason)?.skipReason ??
+            "all checkpoints skipped"
+          : null
     };
   });
 
@@ -472,6 +542,7 @@ export const scanRepository = (
         { index: index + 1, total: shas.length }
       );
       changes.push(change);
+      const headlineCheckpoint = change.checkpoints.at(-1);
       options.onProgress?.({
         type: "change",
         index: index + 1,
@@ -480,7 +551,7 @@ export const scanRepository = (
         kind: change.kind,
         status: change.status,
         addedLines: change.addedLines,
-        survivingLines: change.survivingLines,
+        survivingLines: headlineCheckpoint?.survivingLines ?? 0,
         skipReason: change.skipReason
       });
     }
