@@ -60,7 +60,7 @@ export const renderInspectReport = (result: InspectResult) =>
     `- As of: ${result.asOf}`,
     `- Survival days: ${result.survivalDays.join(", ")}`,
     `- Window days: ${result.windowDays}`,
-    `- Mature change window: ${result.changeWindowStart} to ${result.changeWindowEnd}`,
+    `- Source change window: ${result.changeWindowStart} to ${result.changeWindowEnd}`,
     `- Commit limit: ${result.limit}`,
     `- Commits seen: ${result.commitsSeen}`,
     `- Unique contributors: ${result.contributors.length}`,

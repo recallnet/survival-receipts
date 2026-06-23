@@ -58,7 +58,7 @@ export type ScanProgress =
       total: number;
       shortSha: string;
       kind: "ai" | "human";
-      status: "scored" | "skipped";
+      status: "scored" | "pending" | "skipped";
       addedLines: number;
       survivingLines: number;
       skipReason: string | null;
@@ -83,7 +83,7 @@ export interface ScannedChange {
   changedLines: number;
   estimatedAiCostUsd: number;
   checkpoints: SurvivalCheckpoint[];
-  status: "scored" | "skipped";
+  status: "scored" | "pending" | "skipped";
   skipReason: string | null;
 }
 
@@ -94,7 +94,7 @@ export interface SurvivalCheckpoint {
   survivingLines: number;
   survivalRatio: number | null;
   fileSurvival: FileSurvival[];
-  status: "scored" | "skipped";
+  status: "scored" | "pending" | "skipped";
   skipReason: string | null;
 }
 
@@ -259,8 +259,8 @@ const scoreCheckpoint = (
         survivingLines: 0,
         survivalRatio: null,
         fileSurvival: [],
-        status: "skipped",
-        skipReason: `commit has not reached ${survivalDays} day survival age`
+        status: "pending",
+        skipReason: null
       };
     }
 
@@ -484,7 +484,15 @@ const scanCommit = (
     const scoredCheckpoints = checkpoints.filter(
       (checkpoint) => checkpoint.status === "scored"
     );
-    const status = scoredCheckpoints.length > 0 ? "scored" : "skipped";
+    const pendingCheckpoints = checkpoints.filter(
+      (checkpoint) => checkpoint.status === "pending"
+    );
+    const status =
+      scoredCheckpoints.length > 0
+        ? "scored"
+        : pendingCheckpoints.length > 0
+          ? "pending"
+          : "skipped";
 
     return {
       ...base,

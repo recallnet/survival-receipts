@@ -28,9 +28,9 @@ export const resolveScanWindow = (
   windowDays: number
 ): ScanWindow => {
   const asOf = parseAsOf(asOfInput);
-  const maxSurvivalDays = Math.max(...survivalDays);
+  const minSurvivalDays = Math.min(...survivalDays);
   const changeWindowEnd = new Date(
-    asOf.getTime() - daysToMs(maxSurvivalDays)
+    asOf.getTime() - daysToMs(minSurvivalDays)
   );
   const changeWindowStart = new Date(
     changeWindowEnd.getTime() - daysToMs(windowDays)

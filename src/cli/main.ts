@@ -158,7 +158,9 @@ const writeProgress = (event: ScanProgress) => {
   const summary =
     event.status === "scored"
       ? `${event.kind} scored ${event.survivingLines}/${event.addedLines} surviving lines`
-      : `${event.kind} skipped: ${event.skipReason}`;
+      : event.status === "pending"
+        ? `${event.kind} pending: no requested checkpoint is mature yet`
+        : `${event.kind} skipped: ${event.skipReason}`;
 
   process.stderr.write(`  ${summary}\n`);
 };

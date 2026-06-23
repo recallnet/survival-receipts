@@ -5,6 +5,7 @@ interface ChangeGroupSummary {
   kind: "ai" | "human";
   changes: ScannedChange[];
   scored: ScannedChange[];
+  pending: ScannedChange[];
   survivalDays: number;
   addedLines: number;
   survivingLines: number;
@@ -78,8 +79,15 @@ const markerText = (change: ScannedChange) =>
     ? change.ai.matches.map((match) => match.label).join(", ")
     : "none";
 
+const scoredCheckpoints = (result: ScanResult) =>
+  result.survivalDays.filter((survivalDays) =>
+    result.changes.some(
+      (change) => scoredCheckpointFor(change, survivalDays) !== null
+    )
+  );
+
 const headlineSurvivalDays = (result: ScanResult) =>
-  result.survivalDays.at(-1) ?? 30;
+  scoredCheckpoints(result).at(-1) ?? result.survivalDays.at(-1) ?? 30;
 
 const checkpointFor = (
   change: ScannedChange,
@@ -96,6 +104,15 @@ const scoredCheckpointFor = (
   return checkpoint?.status === "scored" ? checkpoint : null;
 };
 
+const pendingCheckpointFor = (
+  change: ScannedChange,
+  survivalDays: number
+): SurvivalCheckpoint | null => {
+  const checkpoint = checkpointFor(change, survivalDays);
+
+  return checkpoint?.status === "pending" ? checkpoint : null;
+};
+
 const summarize = (
   result: ScanResult,
   kind: "ai" | "human",
@@ -104,6 +121,9 @@ const summarize = (
   const changes = result.changes.filter((change) => change.kind === kind);
   const scored = changes.filter(
     (change) => scoredCheckpointFor(change, survivalDays) !== null
+  );
+  const pending = changes.filter(
+    (change) => pendingCheckpointFor(change, survivalDays) !== null
   );
   const addedLines = sum(scored, (change) => change.addedLines);
   const survivingLines = sum(
@@ -115,6 +135,7 @@ const summarize = (
     kind,
     changes,
     scored,
+    pending,
     survivalDays,
     addedLines,
     survivingLines,
@@ -179,17 +200,19 @@ const renderCheckpointTable = (comparisons: CheckpointComparison[]) => {
   const rows = comparisons.map(({ survivalDays, ai, human }) => [
     `${survivalDays}`,
     String(ai.scored.length),
+    String(ai.pending.length),
     String(ai.survivingLines),
     pct(ai.survivalRatio),
     String(human.scored.length),
+    String(human.pending.length),
     String(human.survivingLines),
     pct(human.survivalRatio),
     pointDelta(ai.survivalRatio, human.survivalRatio)
   ]);
 
   return [
-    "| Survival days | AI scored | AI survived | AI survival | Human scored | Human survived | Human survival | AI minus human |",
-    "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| Survival days | AI scored | AI pending | AI survived | AI survival | Human scored | Human pending | Human survived | Human survival | AI minus human |",
+    "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...rows.map((row) => `| ${row.join(" | ")} |`),
     ""
   ].join("\n");
@@ -266,6 +289,35 @@ const renderSkipped = (result: ScanResult) => {
     .join("\n");
 };
 
+const renderPending = (result: ScanResult) => {
+  const pending = result.changes.flatMap((change) =>
+    change.checkpoints
+      .filter((checkpoint) => checkpoint.status === "pending")
+      .map((checkpoint) => ({
+        change,
+        checkpoint
+      }))
+  );
+
+  if (pending.length === 0) {
+    return "- No pending checkpoints.\n";
+  }
+
+  const byDays = new Map<number, number>();
+
+  for (const item of pending) {
+    byDays.set(
+      item.checkpoint.survivalDays,
+      (byDays.get(item.checkpoint.survivalDays) ?? 0) + 1
+    );
+  }
+
+  return [...byDays.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([days, count]) => `- ${days} days: ${count} pending checkpoints`)
+    .join("\n");
+};
+
 const bucketLeaderSummary = (comparisons: BucketComparison[]) => {
   const comparable = comparisons.filter(
     (comparison) =>
@@ -303,7 +355,9 @@ const renderVerdict = (
   bucketComparisons: BucketComparison[]
 ) => {
   if (ai.survivalRatio === null) {
-    return "No deterministic AI-authored changes were scored in this scan.";
+    return ai.pending.length > 0
+      ? `No deterministic AI-authored changes have a mature ${ai.survivalDays} day checkpoint yet. ${ai.pending.length} AI checkpoints are pending at this horizon.`
+      : "No deterministic AI-authored changes were scored in this scan.";
   }
 
   if (human.survivalRatio === null) {
@@ -329,6 +383,7 @@ const renderVerdict = (
 
 export const renderMarkdownReport = (result: ScanResult) => {
   const headlineDays = headlineSurvivalDays(result);
+  const availableDays = scoredCheckpoints(result);
   const ai = summarize(result, "ai", headlineDays);
   const human = summarize(result, "human", headlineDays);
   const bucketComparisons = compareSizeBuckets(result, headlineDays);
@@ -372,9 +427,10 @@ export const renderMarkdownReport = (result: ScanResult) => {
     `- Source from commit: ${result.sourceFromSha?.slice(0, 12) ?? "none"}`,
     `- Source to commit: ${result.sourceToSha?.slice(0, 12) ?? "none"}`,
     `- Survival days: ${result.survivalDays.join(", ")}`,
+    `- Available survival days: ${availableDays.length > 0 ? availableDays.join(", ") : "none"}`,
     `- Headline survival days: ${headlineDays}`,
     `- Window days: ${result.windowDays}`,
-    `- Mature change window: ${result.changeWindowStart} to ${result.changeWindowEnd}`,
+    `- Source change window: ${result.changeWindowStart} to ${result.changeWindowEnd}`,
     `- Config: ${result.configPath ?? "none"}`,
     `- Configured AI GitHub usernames: ${result.configuredAiGithubUsernames.length}`,
     `- Configured AI PR numbers: ${result.configuredAiPrNumbers.length}`,
@@ -399,6 +455,10 @@ export const renderMarkdownReport = (result: ScanResult) => {
     "## Survival by checkpoint",
     "",
     renderCheckpointTable(checkpointComparisons),
+    "## Pending checkpoints",
+    "",
+    renderPending(result),
+    "",
     "## Survival by change size",
     "",
     renderSizeBucketTable(bucketComparisons),
@@ -440,7 +500,8 @@ export const renderMarkdownReport = (result: ScanResult) => {
         result.copyDetection ? " and copy detection" : ""
       }.`,
       "A line survives when the survival-date blame still attributes it to the source commit.",
-      "The mature change window ends at the largest survival-days checkpoint before the report cutoff, so every headline change has had the full survival period.",
+      "A checkpoint is pending when the change has not reached that survival age yet. Pending checkpoints are stored but excluded from survival ratios until they mature.",
+      "The source change window ends at the smallest requested survival-days checkpoint before the report cutoff, so every included change has at least one requested checkpoint available.",
       "Size buckets compare AI and human changes with similar added-line counts: tiny is 1-20 lines, small is 21-100, medium is 101-500, and large is 501 or more.",
       "Generated files, lockfiles, build output, vendored code, sourcemaps, snapshots, binary assets, and media files are excluded.",
       "Merge commits are skipped for now because proper support needs branch reconstruction.",

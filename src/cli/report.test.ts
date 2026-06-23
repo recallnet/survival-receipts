@@ -7,6 +7,8 @@ const makeChange = (input: {
   kind: "ai" | "human";
   addedLines: number;
   survivingLines: number;
+  survivalDays?: number;
+  pendingDays?: number[];
 }): ScannedChange => ({
   commit: {
     sha: input.id.padEnd(40, "0"),
@@ -39,7 +41,7 @@ const makeChange = (input: {
   estimatedAiCostUsd: input.kind === "ai" ? 1 : 0,
   checkpoints: [
     {
-      survivalDays: 30,
+      survivalDays: input.survivalDays ?? 30,
       survivalDate: "2026-02-01T12:00:00Z",
       targetSha: "target",
       survivingLines: input.survivingLines,
@@ -47,13 +49,26 @@ const makeChange = (input: {
       fileSurvival: [],
       status: "scored",
       skipReason: null
-    }
+    },
+    ...(input.pendingDays ?? []).map((days) => ({
+      survivalDays: days,
+      survivalDate: "2026-03-01T12:00:00Z",
+      targetSha: null,
+      survivingLines: 0,
+      survivalRatio: null,
+      fileSurvival: [],
+      status: "pending" as const,
+      skipReason: null
+    }))
   ],
   status: "scored",
   skipReason: null
 });
 
-const makeResult = (changes: ScannedChange[]): ScanResult => ({
+const makeResult = (
+  changes: ScannedChange[],
+  survivalDays: number[] = [30]
+): ScanResult => ({
   generatedAt: "2026-02-01T12:00:00Z",
   repoInput: ".",
   repoRoot: "/repo",
@@ -68,7 +83,7 @@ const makeResult = (changes: ScannedChange[]): ScanResult => ({
   configPath: null,
   configuredAiGithubUsernames: [],
   configuredAiPrNumbers: [],
-  survivalDays: [30],
+  survivalDays,
   windowDays: 31,
   limit: 250,
   maxFilesPerChange: 25,
@@ -187,5 +202,37 @@ describe("survival report", () => {
     expect(report).toContain(
       "Humans led in 3 of 4 comparable size buckets."
     );
+  });
+
+  it("shows pending checkpoints without blocking available survival data", () => {
+    const report = renderMarkdownReport(
+      makeResult(
+        [
+          makeChange({
+            id: "aiYoung",
+            kind: "ai",
+            addedLines: 10,
+            survivingLines: 8,
+            survivalDays: 15,
+            pendingDays: [30]
+          }),
+          makeChange({
+            id: "humanYoung",
+            kind: "human",
+            addedLines: 10,
+            survivingLines: 7,
+            survivalDays: 15,
+            pendingDays: [30]
+          })
+        ],
+        [15, 30]
+      )
+    );
+
+    expect(report).toContain("- Available survival days: 15");
+    expect(report).toContain("- Headline survival days: 15");
+    expect(report).toContain("| 30 | 0 | 1 | 0 | n/a | 0 | 1 | 0 | n/a | n/a |");
+    expect(report).toContain("## Pending checkpoints");
+    expect(report).toContain("- 30 days: 2 pending checkpoints");
   });
 });

@@ -343,6 +343,56 @@ describe("CLI scanner", () => {
     }
   });
 
+  it("marks future checkpoints as pending while scoring mature checkpoints", async () => {
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "survival-pending-"));
+
+    try {
+      await execFileAsync("git", ["init", repo]);
+      await git(repo, ["config", "user.name", "Test User"]);
+      await git(repo, ["config", "user.email", "test@example.com"]);
+
+      await fs.writeFile(path.join(repo, "app.ts"), "base\n");
+      await commitAll(repo, ["initial"], "2026-01-01T12:00:00Z");
+
+      await fs.writeFile(path.join(repo, "app.ts"), "base\nnew line\n");
+      await commitAll(repo, ["young change (#9)"], "2026-01-10T12:00:00Z");
+
+      const result = await Effect.runPromise(
+        scanRepository({
+          repo,
+          asOf: "2026-01-30T12:00:00Z",
+          configPath: null,
+          fromCommit: null,
+          toCommit: null,
+          survivalDays: [1, 7, 15, 30],
+          windowDays: 30,
+          limit: 25,
+          maxFilesPerChange: 40,
+          maxAddedLinesPerChange: 2500,
+          maxFileAddedLines: 750,
+          blameTimeoutMs: 30000,
+          copyDetection: false
+        })
+      );
+      const change = result.changes.find(
+        (item) => item.commit.subject === "young change (#9)"
+      );
+
+      expect(result.changeWindowEnd).toBe("2026-01-29T12:00:00.000Z");
+      expect(change?.status).toBe("scored");
+      expect(change?.checkpoints.map((checkpoint) => checkpoint.status)).toEqual([
+        "scored",
+        "scored",
+        "scored",
+        "pending"
+      ]);
+      expect(change?.checkpoints[3]?.survivalDays).toBe(30);
+      expect(change?.checkpoints[3]?.survivalRatio).toBeNull();
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true });
+    }
+  });
+
   it("scans an explicit commit cursor range", async () => {
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), "survival-range-"));
 

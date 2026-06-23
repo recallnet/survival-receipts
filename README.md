@@ -111,14 +111,16 @@ run blame or score survival.
 `--as-of` is the report cutoff and defaults to the current time.
 `--survival-days` says how old a change must be before the scanner judges it.
 It accepts one checkpoint, such as `30`, or a list, such as `1,7,15,30`.
-`--window-days` says how many days of mature source changes to include.
+`--window-days` says how many days of source changes to include.
 
 With `--as-of 2026-06-01 --survival-days 30 --window-days 7`, the scanner looks
 at changes from 2026-04-25 through 2026-05-02. Those are the latest 7 days of
 changes that had a full 30 days to survive by 2026-06-01.
 
-With `--as-of 2026-06-01 --survival-days 1,7,15,30 --window-days 7`, it uses
-the same source window and scores each change at 1, 7, 15, and 30 days.
+With `--as-of 2026-06-01 --survival-days 1,7,15,30 --window-days 7`, the
+scanner looks at changes from 2026-05-24 through 2026-05-31. Every included
+change is old enough for the 1-day checkpoint. The 7, 15, and 30-day
+checkpoints are scored when available and marked pending when they are not.
 
 Use `--as-of` when you want to backtest as of a past date:
 
@@ -303,7 +305,7 @@ jobs:
           window-days: ${{ inputs.window-days }}
 ```
 
-The other useful mode is a scheduled report over a mature window:
+The other useful mode is a scheduled report over a source window:
 
 ```yaml
 name: Weekly survival report
@@ -332,12 +334,9 @@ jobs:
 
 With `survival-days: "30"` and `window-days: "7"`, each weekly run scores the
 latest 7 days of changes that had 30 days to survive. With
-`survival-days: "1,7,15,30"`, the same run also shows the earlier survival
-curve for that cohort. That keeps newly merged code out of the report until it
-is mature enough to judge. A PR-time action is less useful for this metric
-because a newly merged PR cannot have a 30 day survival score yet. A later
-version can record a pending receipt on merge, then score it once the survival
-period matures.
+`survival-days: "1,7,15,30"`, each weekly run scores the latest 7 days of
+changes that had at least 1 day to survive. Longer checkpoints are scored when
+available and shown as pending when they are not.
 
 For backend-connected scheduled runs, prefer cursor mode. The action asks the
 backend for the latest mature commit it has already processed, computes the
