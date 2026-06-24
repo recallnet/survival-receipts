@@ -355,6 +355,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
 
     steps:
       - uses: actions/checkout@v4
@@ -367,22 +368,32 @@ jobs:
           survival-days: "1,7,15,30"
           limit: "1000"
           upload-url: https://app.example.com/api/runs
-          api-key: ${{ secrets.SURVIVAL_API_KEY }}
 ```
 
 When `upload-url` ends with `/api/runs`, the action derives the cursor endpoint
 as `/api/cursor`. Pass `cursor-url` explicitly if your backend uses a different
 path.
 
-To connect the action to a hosted app, pass a backend upload URL and API key:
+To connect the action to a hosted app, pass a backend upload URL. If `api-key`
+is omitted, the action requests a GitHub Actions OIDC token. The workflow job
+must grant `id-token: write`, and the backend must have the repo from an active
+GitHub App installation.
 
 ```yaml
-- uses: recallnet/survival-receipts@v0
-  with:
-    survival-days: "30"
-    window-days: "7"
-    upload-url: https://app.example.com/api/runs
-    api-key: ${{ secrets.SURVIVAL_API_KEY }}
+permissions:
+  contents: read
+  id-token: write
+
+steps:
+  - uses: actions/checkout@v4
+    with:
+      fetch-depth: 0
+
+  - uses: recallnet/survival-receipts@v0
+    with:
+      survival-days: "30"
+      window-days: "7"
+      upload-url: https://app.example.com/api/runs
 ```
 
 The backend receives an envelope containing GitHub run metadata and the JSON

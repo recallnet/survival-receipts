@@ -67,9 +67,13 @@ inputs:
     required: false
     default: ""
   api-key:
-    description: Optional backend API key. Required when upload-url or cursor-mode is set.
+    description: "Optional backend API key. If omitted, the action uses GitHub Actions OIDC and the workflow job must grant id-token: write."
     required: false
     default: ""
+  oidc-audience:
+    description: Audience to request for GitHub Actions OIDC upload tokens. Must match the backend GITHUB_OIDC_AUDIENCE.
+    required: false
+    default: survival-receipts
 
 outputs:
   markdown-path:
@@ -124,6 +128,7 @@ runs:
         INPUT_CURSOR_MODE: ${{ inputs.cursor-mode }}
         INPUT_CURSOR_URL: ${{ inputs.cursor-url }}
         INPUT_API_KEY: ${{ inputs.api-key }}
+        INPUT_OIDC_AUDIENCE: ${{ inputs.oidc-audience }}
       run: |
         set -euo pipefail
 
@@ -147,8 +152,8 @@ runs:
 
         CURSOR_URL="$INPUT_CURSOR_URL"
         if [ "$INPUT_CURSOR_MODE" = "true" ]; then
-          if [ -z "$INPUT_UPLOAD_URL" ] || [ -z "$INPUT_API_KEY" ]; then
-            echo "::error::cursor-mode requires upload-url and api-key"
+          if [ -z "$INPUT_UPLOAD_URL" ]; then
+            echo "::error::cursor-mode requires upload-url"
             exit 1
           fi
 
@@ -197,6 +202,46 @@ runs:
         fi
 
         SKIPPED="false"
+        AUTH_HEADER=""
+
+        build_auth_header() {
+          if [ -n "$INPUT_API_KEY" ]; then
+            printf 'authorization: Bearer %s' "$INPUT_API_KEY"
+            return
+          fi
+
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::upload-url requires api-key or job permissions id-token: write for GitHub Actions OIDC"
+            exit 1
+          fi
+
+          ENCODED_AUDIENCE="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$INPUT_OIDC_AUDIENCE")"
+          OIDC_URL="$ACTIONS_ID_TOKEN_REQUEST_URL"
+          if [[ "$OIDC_URL" == *\?* ]]; then
+            OIDC_URL="$OIDC_URL&audience=$ENCODED_AUDIENCE"
+          else
+            OIDC_URL="$OIDC_URL?audience=$ENCODED_AUDIENCE"
+          fi
+
+          OIDC_RESPONSE="$REPORT_DIR/oidc-token.json"
+          curl -fsS \
+            -H "authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            -H "accept: application/json" \
+            -o "$OIDC_RESPONSE" \
+            "$OIDC_URL"
+          OIDC_TOKEN="$(node -e 'const fs=require("node:fs"); const data=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(data.value || "");' "$OIDC_RESPONSE")"
+
+          if [ -z "$OIDC_TOKEN" ]; then
+            echo "::error::GitHub Actions OIDC response did not contain a token"
+            exit 1
+          fi
+
+          printf 'authorization: Bearer %s' "$OIDC_TOKEN"
+        }
+
+        if [ -n "$INPUT_UPLOAD_URL" ] || [ "$INPUT_CURSOR_MODE" = "true" ]; then
+          AUTH_HEADER="$(build_auth_header)"
+        fi
 
         if [ "$INPUT_CURSOR_MODE" = "true" ]; then
           MAX_SURVIVAL_DAYS="$(
@@ -223,7 +268,7 @@ runs:
             node -e 'const fs=require("node:fs"); const [owner, repo]=(process.env.GITHUB_REPOSITORY || "/").split("/"); const repositoryId=process.env.GITHUB_REPOSITORY_ID ? Number(process.env.GITHUB_REPOSITORY_ID) : undefined; const body={github:{owner,repo,repository:process.env.GITHUB_REPOSITORY,repositoryId},survivalDays:process.env.INPUT_SURVIVAL_DAYS.split(",").map((part)=>Number.parseInt(part.trim(),10)).filter(Number.isFinite)}; fs.writeFileSync(process.argv[1], JSON.stringify(body));' "$CURSOR_REQUEST"
             curl -fsS \
               -X POST \
-              -H "authorization: Bearer $INPUT_API_KEY" \
+              -H "$AUTH_HEADER" \
               -H "content-type: application/json" \
               --data-binary @"$CURSOR_REQUEST" \
               -o "$CURSOR_RESPONSE" \
@@ -267,16 +312,11 @@ runs:
         fi
 
         if [ -n "$INPUT_UPLOAD_URL" ] && [ "$SKIPPED" != "true" ]; then
-          if [ -z "$INPUT_API_KEY" ]; then
-            echo "::error::upload-url requires api-key"
-            exit 1
-          fi
-
           node -e 'const fs=require("node:fs"); const report=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const [owner, repo]=(process.env.GITHUB_REPOSITORY || "/").split("/"); const repositoryId=process.env.GITHUB_REPOSITORY_ID ? Number(process.env.GITHUB_REPOSITORY_ID) : undefined; const body={schemaVersion:"survival.run.v1",source:"github_action",github:{owner,repo,repository:process.env.GITHUB_REPOSITORY,repositoryId,workflowRunId:process.env.GITHUB_RUN_ID,workflowSha:process.env.GITHUB_SHA,actor:process.env.GITHUB_ACTOR},report}; fs.writeFileSync(process.argv[2], JSON.stringify(body));' "$JSON_FILE" "$UPLOAD_FILE"
 
           curl -fsS \
             -X POST \
-            -H "authorization: Bearer $INPUT_API_KEY" \
+            -H "$AUTH_HEADER" \
             -H "content-type: application/json" \
             --data-binary @"$UPLOAD_FILE" \
             "$INPUT_UPLOAD_URL"
